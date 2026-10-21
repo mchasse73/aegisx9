@@ -10,6 +10,19 @@
         port: 5000
         data_alerts_path: alerts
         data_host_path: ""
+    # Break-glass events from laptops (workspace/breakglass/bin). In the automation
+    # controller this source is swapped for the "AegisX9 break-glass" event stream, whose
+    # HMAC credential verifies X-AegisX9-Signature (sha256, hex, prefix "sha256="). The key
+    # is never in this file: stand-alone runs pass it with --env-vars AEGISX9_EVENT_HMAC.
+    - name: Break-glass event stream
+      ansible.eda.webhook:
+        host: 0.0.0.0
+        port: 5001
+        hmac_secret: "{{ AEGISX9_EVENT_HMAC }}"
+        hmac_header: X-AegisX9-Signature
+        hmac_algo: sha256
+        hmac_format: hex
+        hmac_signature_prefix: "sha256="
   rules:
     - name: Repeated prompt injection from one principal
       condition: >-
@@ -40,3 +53,46 @@
           job_args:
             extra_vars:
               audit_evidence_environment: "{{ event.alert.labels.environment }}"
+
+    - name: Break-glass window opened
+      condition: event.payload.event == "breakglass_activation"
+      actions:
+        - run_job_template:
+            name: "AegisX9 - Break-glass record"
+            organization: AegisX9
+            job_args:
+              extra_vars:
+                breakglass_event: activation
+                breakglass_activation_id: "{{ event.payload.activation_id }}"
+                breakglass_who: "{{ event.payload.who }}"
+                breakglass_started_at: "{{ event.payload.started_at }}"
+                breakglass_expires_at: "{{ event.payload.expires_at }}"
+                breakglass_window_hours: "{{ event.payload.window_hours }}"
+                breakglass_device: "{{ event.payload.device }}"
+        # The expiry timer: waits until expires_at, then revokes the window token by its
+        # accessor whether or not the developer ran handoff-sync.
+        - run_job_template:
+            name: "AegisX9 - Break-glass window"
+            organization: AegisX9
+            job_args:
+              extra_vars:
+                breakglass_activation_id: "{{ event.payload.activation_id }}"
+                breakglass_who: "{{ event.payload.who }}"
+                breakglass_expires_at: "{{ event.payload.expires_at }}"
+                breakglass_token_accessor: "{{ event.payload.token_accessor }}"
+
+    - name: Break-glass sync completed
+      condition: event.payload.event == "breakglass_sync"
+      action:
+        run_job_template:
+          name: "AegisX9 - Break-glass record"
+          organization: AegisX9
+          job_args:
+            extra_vars:
+              breakglass_event: sync
+              breakglass_activation_id: "{{ event.payload.activation_id }}"
+              breakglass_who: "{{ event.payload.who }}"
+              breakglass_result: "{{ event.payload.result }}"
+              breakglass_files: "{{ event.payload.files | default(0) }}"
+              breakglass_bytes: "{{ event.payload.bytes | default(0) }}"
+              breakglass_revoked: "{{ event.payload.revoked | default(false) }}"

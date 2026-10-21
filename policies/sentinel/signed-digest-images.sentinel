@@ -67,6 +67,22 @@ deployment_problems = func(rc) {
 	return problems
 }
 
+# Bare pods (the Coder workspace template runs one per developer).
+pods = filter tfplan.resource_changes as _, rc {
+	rc.mode is "managed" and rc.type is "kubernetes_pod_v1" and
+		(rc.change.actions contains "create" or rc.change.actions contains "update")
+}
+
+pod_problems = func(rc) {
+	problems = []
+	for rc.change.after.spec[0].container as c {
+		if not pinned_ref(c.image) {
+			append(problems, "container " + c.name + " image must be allowed and digest-pinned")
+		}
+	}
+	return problems
+}
+
 violations = {}
 for releases as address, rc {
 	p = helm_problems(rc)
@@ -76,6 +92,12 @@ for releases as address, rc {
 }
 for deployments as address, rc {
 	p = deployment_problems(rc)
+	if length(p) > 0 {
+		violations[address] = p
+	}
+}
+for pods as address, rc {
+	p = pod_problems(rc)
 	if length(p) > 0 {
 		violations[address] = p
 	}

@@ -24,6 +24,35 @@ resource_changes = {
 			},
 		},
 	},
+	"kubernetes_pod_v1.main[0]": {
+		"address": "kubernetes_pod_v1.main[0]",
+		"mode": "managed",
+		"type": "kubernetes_pod_v1",
+		"name": "main",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"metadata": [
+					{
+						"name": "coder-dev-ws",
+						"namespace": "aegisx9-dev",
+					},
+				],
+				"spec": [
+					{
+						"container": [
+							{
+								"name": "dev",
+								"image": "ghcr.io/mchasse73/aegisx9/workspace@sha256:abababababababababababababababababababababababababababababababab",
+							},
+						],
+					},
+				],
+			},
+		},
+	},
 }
 
 variables = {}

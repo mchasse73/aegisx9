@@ -31,6 +31,8 @@ packages = ["src/aegisx9"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+# Break-glass tools are Python scripts without a .py suffix; lint and format them too.
+extend-include = ["workspace/breakglass/bin/handoff-sync", "workspace/breakglass/bin/aegisx9-event"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "S", "C4", "SIM", "RUF"]
@@ -42,7 +44,8 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "C4", "SIM", "RUF"]
 python_version = "3.12"
 strict = true
 mypy_path = "src"
-packages = ["aegisx9"]
+files = ["src/aegisx9", "workspace/breakglass/bin/handoff-sync", "workspace/breakglass/bin/aegisx9-event"]
+scripts_are_modules = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

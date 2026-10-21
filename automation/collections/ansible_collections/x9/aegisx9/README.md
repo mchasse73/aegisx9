@@ -9,6 +9,7 @@ templates and Event-Driven Ansible.
 | `gateway` | Upgrade the gateway by opening a promotion PR (GitOps), then verify the rollout |
 | `audit_evidence` | Collect signed audit records, policy results and SBOM/signature evidence into a bundle |
 | `incident` | Block a gateway key and open an incident record |
+| `breakglass` | Keep the ledger of break-glass local-workspace activations and syncs; expire a window by revoking its Vault token (by accessor) |
 
 Credentials come from AAP credential types injected as environment variables; tasks that
 touch them use `no_log: true`. Nothing secret is ever passed on a command line.

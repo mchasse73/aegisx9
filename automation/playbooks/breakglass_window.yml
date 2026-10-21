@@ -1,0 +1,8 @@
+---
+- name: Expire a break-glass window and revoke its Vault token (EDA timer)
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: x9.aegisx9.breakglass
+      vars:
+        breakglass_action: expire
