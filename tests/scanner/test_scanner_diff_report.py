@@ -31,6 +31,7 @@ RESOLVE = fake_resolver(
         "vault.example.com": ["203.0.113.20"],
     }
 )
+WWW = "console.example.com,www.example.com"  # both names share the address
 
 
 def _observation(
@@ -46,35 +47,41 @@ def test_classify_ports(
 ) -> None:
     obs = _observation(targets_cfg, registry, never)
     obs.open_ports = [
-        OpenPort("203.0.113.10", 443, "tcp", "https"),  # approved
-        OpenPort("203.0.113.12", 25, "tcp", "smtp"),  # approved by ip + ports list
+        OpenPort("203.0.113.10", 443, "tcp", "https"),  # approved, but not open last run
+        OpenPort("203.0.113.12", 25, "tcp", "smtp"),  # approved by ip + ports list, seen before
         OpenPort("203.0.113.10", 22, "tcp", "ssh"),  # known host, unapproved port
         OpenPort("203.0.113.11", 8443, "tcp"),  # known via gateway host, seen before
         OpenPort("203.0.113.30", 3389, "tcp", "ms-wbt-server"),  # unknown address
         OpenPort("203.0.113.20", 8200, "tcp"),  # prohibited name
     ]
     previous = {
-        "open_ports": ["203.0.113.11/tcp/8443", "203.0.113.10/tcp/8080"],
+        "open_ports": ["203.0.113.11/tcp/8443", "203.0.113.10/tcp/8080", "203.0.113.12/tcp/25"],
         "ports_scanned": True,
     }
     alerts = classify(obs, registry, previous, today=TODAY)
     by_kind = {(a.kind, a.target, a.port): a for a in alerts}
-    assert (
-        by_kind[(Kind.NEW_OPEN_PORT, "console.example.com,www.example.com", 22)].severity
-        == Severity.HIGH
-    )
+    assert by_kind[(Kind.NEW_OPEN_PORT, WWW, 22)].severity == Severity.HIGH
     stale = by_kind[(Kind.NEW_OPEN_PORT, "gateway.example.com", 8443)]
     assert stale.severity == Severity.MEDIUM and "seen before" in stale.detail
     assert by_kind[(Kind.UNAPPROVED_HOST, "203.0.113.30", 3389)].severity == Severity.HIGH
     assert by_kind[(Kind.PROHIBITED_HOST, "vault.example.com", 8200)].severity == Severity.CRITICAL
+    # Approved exposure that changed since the last run is still reported (never "clean").
+    opened = by_kind[(Kind.APPROVED_PORT_OPENED, WWW, 443)]
+    assert opened.severity == Severity.MEDIUM and "approved" in opened.detail
+    assert (Kind.APPROVED_PORT_OPENED, "mail.example.com", 25) not in by_kind  # unchanged
     closed = by_kind[(Kind.PORT_CLOSED, "203.0.113.10", 8080)]
-    assert closed.severity == Severity.INFO
-    assert (Kind.NEW_OPEN_PORT, "console.example.com,www.example.com", 443) not in by_kind
+    assert closed.severity == Severity.MEDIUM
+    assert (Kind.NEW_OPEN_PORT, WWW, 443) not in by_kind
     assert (Kind.NEW_OPEN_PORT, "mail.example.com", 25) not in by_kind
-    assert (
-        by_kind[(Kind.NEW_OPEN_PORT, "console.example.com,www.example.com", 22)].to_dict()["kind"]
-        == "NEW_OPEN_PORT"
-    )
+    assert by_kind[(Kind.NEW_OPEN_PORT, WWW, 22)].to_dict()["kind"] == "NEW_OPEN_PORT"
+
+
+def test_first_run_has_no_baseline_to_diff(
+    targets_cfg: TargetConfig, registry: Registry, never: NeverTargetList
+) -> None:
+    obs = _observation(targets_cfg, registry, never)
+    obs.open_ports = [OpenPort("203.0.113.10", 443, "tcp", "https")]
+    assert classify(obs, registry, None, today=TODAY) == []
 
 
 def test_classify_other_checks(
@@ -105,6 +112,7 @@ def test_classify_other_checks(
     obs.dns = [
         DnsResult("www.example.com", "A", ("203.0.113.10",), ("203.0.113.99",)),
         DnsResult("x.example.com", "A", ("1.2.3.4",), error="OSError"),
+        DnsResult("txt.example.com", "TXT", ("v=spf1",), supported=False, notes=["dig missing"]),
     ]
     obs.uptime = [
         UptimeResult("https://www.example.com/", 503, 20, 200, 1000),
@@ -125,22 +133,33 @@ def test_classify_other_checks(
     assert (Kind.EXPOSURE_FINDING, Severity.CRITICAL, "www.example.com") in kinds
     assert (Kind.EXPOSURE_FINDING, Severity.LOW, "https://www.example.com") in kinds
     assert (Kind.DNS_DRIFT, Severity.HIGH, "www.example.com") in kinds
-    assert (Kind.CHECK_INCOMPLETE, Severity.LOW, "x.example.com") in kinds
+    assert (Kind.CHECK_INCOMPLETE, Severity.MEDIUM, "x.example.com") in kinds
+    unsupported = next(a for a in alerts if a.target == "txt.example.com")
+    assert unsupported.kind == Kind.CHECK_INCOMPLETE and unsupported.severity == Severity.MEDIUM
+    assert "unsupported" in unsupported.detail and "dig missing" in unsupported.detail
     assert (Kind.DOWN, Severity.HIGH, "https://www.example.com/") in kinds
     assert (Kind.DEGRADED, Severity.LOW, "https://gateway.example.com/") in kinds
     assert (Kind.DOWN, Severity.HIGH, "https://down.example.com/") in kinds
     assert all(k != Kind.PORT_CLOSED for k, _, _ in kinds)
 
 
-def test_incomplete_port_scan_is_an_alert(
+def test_incomplete_checks_are_alerts(
     targets_cfg: TargetConfig, registry: Registry, never: NeverTargetList
 ) -> None:
     obs = _observation(targets_cfg, registry, never)
     obs.ports_scanned = False
+    obs.nuclei_expected = True
     alerts = classify(
         obs, registry, {"open_ports": ["203.0.113.10/tcp/22"], "ports_scanned": True}, today=TODAY
     )
-    assert [a.kind for a in alerts] == [Kind.CHECK_INCOMPLETE]
+    assert [(a.kind, a.target) for a in alerts] == [
+        (Kind.CHECK_INCOMPLETE, "port-scan"),
+        (Kind.CHECK_INCOMPLETE, "nuclei"),
+    ]
+    assert all(a.severity == Severity.MEDIUM for a in alerts)
+    obs.nuclei_ran = True
+    obs.ports_scanned = True
+    assert [a.kind for a in classify(obs, registry, None, today=TODAY)] == []
     assert classify(Observation(), registry, None, today=TODAY) == []
 
 
@@ -157,9 +176,8 @@ def test_snapshot_roundtrip(state_dir: Path) -> None:
     path = save_snapshot(snap, state_dir, now=datetime(2026, 10, 21, tzinfo=UTC))
     assert (path.stat().st_mode & 0o777) == 0o600
     loaded = load_snapshot(state_dir)
-    assert (
-        loaded is not None and loaded["open_ports"] == snap["open_ports"] and "saved_at" in loaded
-    )
+    assert loaded is not None and loaded["open_ports"] == snap["open_ports"]
+    assert "saved_at" in loaded
     path.write_text("[]")
     assert load_snapshot(state_dir) is None
     path.write_text("{bad")
@@ -172,20 +190,15 @@ def _report(alerts: list[Alert], mode: str = "daily", **kw: object) -> Report:
 
 
 def test_report_clean_and_alerting(state_dir: Path) -> None:
-    clean = _report(
-        [Alert(Kind.PORT_CLOSED, Severity.INFO, "203.0.113.10", "closed", 22, "tcp")],
-        target_count=3,
-    )
+    info = Alert(Kind.PORT_CLOSED, Severity.INFO, "203.0.113.10", "closed", 22, "tcp")
+    clean = _report([info], target_count=3)
     assert clean.clean and clean.event_type == "clean" and "clean" in clean.summary
     md = render_markdown(clean)
     assert "CLEAN" in md and "Nothing changed" in md and "Informational" in md
     json_path, md_path = write_report(clean, state_dir)
     doc = json.loads(json_path.read_text())
-    assert (
-        doc["clean"]
-        and doc["event"] == "clean"
-        and doc["informational"][0]["kind"] == "PORT_CLOSED"
-    )
+    assert doc["clean"] and doc["event"] == "clean"
+    assert doc["informational"][0]["kind"] == "PORT_CLOSED"
     assert json_path.parent.name == "2026-10-21" and md_path.read_text() == md
     assert (state_dir / "last_report.json").exists()
 
@@ -199,12 +212,8 @@ def test_report_clean_and_alerting(state_dir: Path) -> None:
     assert not bad.clean and bad.event_type == "exposure_change"
     assert bad.summary == "daily: 1 alerts (1 NEW_OPEN_PORT)"
     md = render_markdown(bad)
-    assert (
-        "1 ALERT(S)" in md
-        and "tcp/22 \\| open" in md
-        and "## Notes" in md
-        and "www.example.com:22" in md
-    )
+    assert "1 ALERT(S)" in md and "tcp/22 \\| open" in md and "## Notes" in md
+    assert "www.example.com:22" in md
     assert bad.to_dict()["alerts"][0]["port"] == 22
 
     down = _report(
@@ -219,13 +228,24 @@ def test_report_clean_and_alerting(state_dir: Path) -> None:
     assert "Dry run" in render_markdown(dry)
 
 
+def test_last_report_is_replaced_atomically(state_dir: Path) -> None:
+    """The three units run as different users: an existing 0600 file from another user
+    cannot be truncated, but its directory entry can be replaced."""
+    last = state_dir / "last_report.json"
+    last.write_text('{"stale": true}')
+    last.chmod(0o400)  # simulates "owned by someone else": not writable in place
+    write_report(_report([], mode="uptime"), state_dir)
+    doc = json.loads(last.read_text())
+    assert doc["mode"] == "uptime" and "stale" not in doc
+    assert (last.stat().st_mode & 0o777) == 0o600
+    assert not list(state_dir.glob(".last_report.json.*"))  # no temporary file left behind
+
+
 def test_severity_threshold_and_parse() -> None:
     r = _report(
         [Alert(Kind.EXPOSURE_FINDING, Severity.LOW, "a", "x")], alert_min_severity=Severity.LOW
     )
     assert not r.clean
-    assert (
-        Severity.parse("CRITICAL") is Severity.CRITICAL
-        and Severity.parse("bogus") is Severity.MEDIUM
-    )
+    assert Severity.parse("CRITICAL") is Severity.CRITICAL
+    assert Severity.parse("bogus") is Severity.MEDIUM
     assert Severity.HIGH.rank > Severity.MEDIUM.rank

@@ -2,6 +2,7 @@
 
 Subcommands: ``daily`` (ports, TLS, exposure probes, nuclei, DNS), ``uptime`` (HTTP
 reachability), ``redteam --target-url`` (promptfoo + garak), ``validate-config``.
+Global options (``--config``, ``--state``, ``--dry-run``) come BEFORE the subcommand.
 Exit codes: 0 clean, 1 alerts (systemd marks the unit failed), 2 configuration error.
 """
 
@@ -10,6 +11,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import secrets
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -29,6 +31,7 @@ from aegisx9_scanner.diff import (
     snapshot_from,
     uptime_alerts,
 )
+from aegisx9_scanner.endpoints import web_endpoints
 from aegisx9_scanner.log import configure, event, log_error
 from aegisx9_scanner.notify import NotifyConfig, notify
 from aegisx9_scanner.redteam_external import RedteamConfig, run_redteam
@@ -107,7 +110,14 @@ def main(argv: Sequence[str] | None = None, env: dict[str, str] | None = None) -
     args = build_parser().parse_args(argv)
     configure(logging.DEBUG if args.verbose else logging.INFO)
     env = dict(os.environ) if env is None else env
-    event("aegisx9-scan starting", version=__version__, command=args.command, dry_run=args.dry_run)
+    args.run_id = secrets.token_hex(6)
+    event(
+        "aegisx9-scan starting",
+        version=__version__,
+        command=args.command,
+        dry_run=args.dry_run,
+        run_id=args.run_id,
+    )
     try:
         cfg = Config(args.config)
     except (RegistryError, TargetConfigError) as exc:
@@ -154,6 +164,12 @@ def _validate(cfg: Config, today: Any) -> int:
     return EXIT_CONFIG if targets.refused else EXIT_CLEAN
 
 
+def _work_dir(args: argparse.Namespace, mode: str) -> Path:
+    """A directory used by this run only; stale files from an earlier run never count."""
+    state: Path = Path(args.state)
+    return state / "work" / mode / str(args.run_id)
+
+
 def _run(
     args: argparse.Namespace,
     cfg: Config,
@@ -198,6 +214,7 @@ def _run(
         ),
         target_count=len(targets.targets) if mode == "daily" else len(targets.uptime),
         refused_count=len(targets.refused),
+        run_id=args.run_id,
         dry_run=args.dry_run,
     )
     return _finish(report, obs, args, env, save=(mode == "daily" and not args.dry_run))
@@ -217,10 +234,11 @@ def _refusal_alerts(targets: TargetSet) -> list[Alert]:
 
 def _daily(obs: Observation, targets: TargetSet, args: argparse.Namespace, cfg: Config) -> None:
     s = targets.settings
-    exclude = sorted(cfg.never.hostnames) + [str(n) for n in cfg.never.networks]
+    # Only validated addresses and networks reach nmap; hostnames were resolved and
+    # checked by build_targets and stay in the target set for the report.
     scan = ports.scan_ports(
-        targets.scan_args,
-        exclude=exclude,
+        targets.scan_targets,
+        exclude=[str(n) for n in cfg.never.networks],
         tcp_top_ports=s.nmap_tcp_top_ports,
         udp_top_ports=s.nmap_udp_top_ports,
     )
@@ -229,12 +247,24 @@ def _daily(obs: Observation, targets: TargetSet, args: argparse.Namespace, cfg: 
     obs.udp_scanned = scan.udp_ran
     obs.notes.extend(scan.notes)
 
-    https_hosts = sorted({t.name for t in targets.hosts})
-    for host in https_hosts:
-        obs.tls.append(tls.check_tls(host, timeout=s.http_timeout_s))
-        obs.exposures.extend(http_exposure.probe_host(host, timeout=s.http_timeout_s))
+    endpoints = web_endpoints(targets, scan.open_ports)
+    for ep in endpoints:
+        if ep.scheme == "https":
+            obs.tls.append(
+                tls.check_tls(ep.host, ep.port, address=ep.address, timeout=s.http_timeout_s)
+            )
+        obs.exposures.extend(
+            http_exposure.probe_host(
+                ep.host,
+                scheme=ep.scheme,
+                port=ep.port,
+                address=ep.address,
+                timeout=s.http_timeout_s,
+            )
+        )
     if s.nuclei_enabled:
-        result = nuclei.run_nuclei(https_hosts, args.state / "work")
+        obs.nuclei_expected = nuclei.installed()
+        result = nuclei.run_nuclei([ep.url for ep in endpoints], _work_dir(args, "daily"))
         obs.nuclei = result.findings
         obs.nuclei_ran = result.ran
         obs.notes.extend(result.notes)
@@ -265,7 +295,7 @@ def _redteam(args: argparse.Namespace, cfg: Config, env: dict[str, str]) -> int:
         if args.dry_run:
             notes.append("dry run: suites not executed")
         else:
-            outcome = run_redteam(rt, args.state / "work" / "redteam")
+            outcome = run_redteam(rt, _work_dir(args, "redteam"))
             alerts = outcome.alerts
             notes.extend(outcome.notes)
     report = Report(
@@ -276,6 +306,7 @@ def _redteam(args: argparse.Namespace, cfg: Config, env: dict[str, str]) -> int:
         notes=notes,
         alert_min_severity=Severity.parse(env.get("AEGISX9_SCANNER_ALERT_MIN_SEVERITY", "medium")),
         target_count=1 if rt.target_url else 0,
+        run_id=args.run_id,
         dry_run=args.dry_run,
     )
     return _finish(report, Observation(), args, env, save=False)

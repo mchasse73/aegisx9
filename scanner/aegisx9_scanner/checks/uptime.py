@@ -1,5 +1,6 @@
 """HTTP reachability and latency for the public endpoints (the ``uptime`` subcommand,
-run every five minutes by a systemd timer)."""
+run every five minutes by a systemd timer). Each request is pinned to the first
+validated address of the URL's host; the hostname stays in the URL for Host/SNI."""
 
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ class UptimeResult:
     expect_status: int
     max_latency_ms: int
     error: str = ""
+    address: str = ""
 
     @property
     def up(self) -> bool:
@@ -41,8 +43,9 @@ def check_uptime(
     fetcher = fetcher or fetch
     results: list[UptimeResult] = []
     for target in targets:
+        address = target.addresses[0] if target.addresses else ""
         started = clock()
-        resp = fetcher(target.url, timeout)
+        resp = fetcher(target.url, timeout, address)
         latency_ms = int((clock() - started) * 1000)
         results.append(
             UptimeResult(
@@ -52,6 +55,7 @@ def check_uptime(
                 expect_status=target.expect_status,
                 max_latency_ms=target.max_latency_ms,
                 error=resp.error,
+                address=address,
             )
         )
     return results

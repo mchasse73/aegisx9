@@ -15,7 +15,7 @@ import fnmatch
 import ipaddress
 import socket
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -45,6 +45,7 @@ class UptimeTarget:
     url: str
     expect_status: int = 200
     max_latency_ms: int = 3000
+    addresses: tuple[str, ...] = ()  # validated answers, filled in by build_targets
 
     @property
     def host(self) -> str:
@@ -139,9 +140,16 @@ class TargetSet:
         return [t for t in self.targets if t.kind == "host"]
 
     @property
-    def scan_args(self) -> list[str]:
-        """Hostnames, IPs and CIDRs in the form the port scanner accepts."""
-        return [t.name for t in self.targets]
+    def scan_targets(self) -> list[str]:
+        """What the port scanner gets: every validated address of every hostname (never
+        the name itself, which nmap would resolve again and scan only the first answer
+        of), plus address and network targets. Names stay on the Target for reports."""
+        out: list[str] = []
+        for t in self.targets:
+            for item in [t.name] if t.is_network else t.addresses:
+                if item not in out:
+                    out.append(item)
+        return out
 
     @property
     def addresses(self) -> frozenset[str]:
@@ -287,7 +295,9 @@ def build_targets(
     candidates: list[tuple[str, str]] = [(h, "targets.yml") for h in cfg.hosts]
     candidates += [(c, "targets.yml") for c in cfg.cidrs]
     if registry is not None and cfg.settings.include_registry:
-        for entry in registry.active(today):
+        # Every registry entry stays in scope, expired ones included: an exposure whose
+        # approval lapsed must still be looked at (and is then reported as unapproved).
+        for entry in registry.entries:
             for domain in entry.domains:
                 if "*" not in domain and "?" not in domain:
                     candidates.append((domain, f"registry:{entry.section}"))
@@ -320,7 +330,18 @@ def build_targets(
         targets.append(Target(name=name, kind=kind, source=source, addresses=addresses))
 
     dns = [d for d in cfg.dns if not _refuse(d.name, "targets.yml:dns", never, refused)]
-    uptime = [u for u in cfg.uptime if not _refuse(u.host, "targets.yml:uptime", never, refused)]
+    uptime: list[UptimeTarget] = []
+    for u in cfg.uptime:
+        if _refuse(u.host, "targets.yml:uptime", never, refused):
+            continue
+        # Resolve now, check every answer, and pin the check to those addresses.
+        addresses = (u.host,) if _kind(u.host) == "ip" else tuple(resolver(u.host))
+        hit = never.match_any(addresses)
+        if hit:
+            refused.append(Refusal(name=u.host, source="targets.yml:uptime", rule=hit))
+            event("target refused by never_target", name=u.host, source="uptime", rule=hit)
+            continue
+        uptime.append(replace(u, addresses=addresses))
     return TargetSet(
         targets=targets, dns=dns, uptime=uptime, refused=refused, settings=cfg.settings
     )

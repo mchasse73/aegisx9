@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from aegisx9_scanner.targets import (
     NeverTargetList,
     TargetConfig,
     TargetConfigError,
+    UptimeTarget,
     build_targets,
     check_url_allowed,
     load_never_target,
@@ -27,6 +29,7 @@ RESOLVE = fake_resolver(
         "mail.example.com": ["203.0.113.12"],
         "console.example.com": ["203.0.113.10"],
         "sneaky.example.com": ["192.0.2.7"],
+        "dual.example.com": ["203.0.113.13", "2001:db8::13"],
     }
 )
 
@@ -49,7 +52,7 @@ def test_never_target_matching(never: NeverTargetList) -> None:
 def test_build_targets_merges_registry_and_refuses(
     targets_cfg: TargetConfig, registry: Registry, never: NeverTargetList
 ) -> None:
-    targets_cfg.hosts += ["trading.example.com", "sneaky.example.com"]
+    targets_cfg.hosts += ["trading.example.com", "sneaky.example.com", "dual.example.com"]
     targets_cfg.cidrs.append("192.0.2.0/28")
     ts = build_targets(targets_cfg, registry, never, today=TODAY, resolver=RESOLVE)
     names = {t.name for t in ts.targets}
@@ -63,13 +66,19 @@ def test_build_targets_merges_registry_and_refuses(
     assert ("sneaky.example.com", "cidr:192.0.2.0/24") in refused
     assert ("192.0.2.0/28", "cidr:192.0.2.0/24") in refused
     www = next(t for t in ts.targets if t.name == "www.example.com")
-    assert www.kind == "host" and www.addresses == ("203.0.113.10",) and www.source == "targets.yml"
+    assert www.kind == "host" and www.addresses == ("203.0.113.10",)
+    assert www.source == "targets.yml"
     ip = next(t for t in ts.targets if t.name == "203.0.113.12")
     assert ip.kind == "ip" and ip.source == "registry:public"
     assert "203.0.113.10" in ts.addresses
-    assert "203.0.113.0/27" in ts.scan_args
+    # The port scanner gets validated addresses and networks only, every answer included.
+    scan = ts.scan_targets
+    assert "203.0.113.0/27" in scan and "203.0.113.13" in scan and "2001:db8::13" in scan
+    assert not any(s.endswith("example.com") or s.endswith("example.net") for s in scan)
+    assert scan.count("203.0.113.10") == 1
     assert len(ts.dns) == 3 and len(ts.uptime) == 2
     assert all(t.kind == "host" for t in ts.hosts)
+    assert ts.uptime[0].addresses == ("203.0.113.10",)
 
 
 def test_dns_and_uptime_entries_are_also_refused(
@@ -78,11 +87,20 @@ def test_dns_and_uptime_entries_are_also_refused(
     targets_cfg.dns.append(
         type(targets_cfg.dns[0])(name="trading.example.com", rtype="A", expect=())
     )
-    targets_cfg.uptime.append(type(targets_cfg.uptime[0])(url="https://broker-api.example.com/"))
+    targets_cfg.uptime.append(UptimeTarget(url="https://broker-api.example.com/"))
+    targets_cfg.uptime.append(UptimeTarget(url="https://sneaky.example.com/"))  # answer forbidden
+    targets_cfg.uptime.append(UptimeTarget(url="http://203.0.113.9:8080/health"))
     ts = build_targets(targets_cfg, None, never, today=TODAY, resolver=RESOLVE)
     assert all(d.name != "trading.example.com" for d in ts.dns)
-    assert all("broker" not in u.url for u in ts.uptime)
+    assert all("broker" not in u.url and "sneaky" not in u.url for u in ts.uptime)
     assert {r.source for r in ts.refused} == {"targets.yml:dns", "targets.yml:uptime"}
+    assert {r.name for r in ts.refused} == {
+        "trading.example.com",
+        "broker-api.example.com",
+        "sneaky.example.com",
+    }
+    literal = next(u for u in ts.uptime if u.url.startswith("http://203"))
+    assert literal.addresses == ("203.0.113.9",)
 
 
 def test_include_registry_can_be_disabled(
@@ -91,6 +109,17 @@ def test_include_registry_can_be_disabled(
     targets_cfg.settings.include_registry = False
     ts = build_targets(targets_cfg, registry, never, today=TODAY, resolver=RESOLVE)
     assert {t.source for t in ts.targets} == {"targets.yml"}
+
+
+def test_expired_registry_entries_stay_in_scope(
+    targets_cfg: TargetConfig, registry: Registry, never: NeverTargetList
+) -> None:
+    targets_cfg.hosts.clear()
+    later = date(2027, 6, 1)
+    assert registry.expired(later)  # the gateway approval lapsed...
+    ts = build_targets(targets_cfg, registry, never, today=later, resolver=RESOLVE)
+    assert "gateway.example.com" in {t.name for t in ts.targets}  # ...but it is still scanned
+    assert "203.0.113.11" in ts.scan_targets
 
 
 def test_check_url_allowed(never: NeverTargetList) -> None:
@@ -116,6 +145,8 @@ def test_parse_targets_validation() -> None:
         parse_targets({"dns": [{"type": "A"}]})
     with pytest.raises(TargetConfigError, match="url is required"):
         parse_targets({"uptime": [{}]})
+    with pytest.raises(TargetConfigError, match="url is required"):
+        parse_targets({"uptime": ["https://www.example.com/"]})  # a bare string is not an entry
     with pytest.raises(TargetConfigError, match="http"):
         parse_targets({"uptime": [{"url": "ftp://x"}]})
     with pytest.raises(TargetConfigError, match="unknown setting"):

@@ -5,22 +5,26 @@ a port scan says "443 open, as approved" and a generic template run may skip the
 but ``GET /.git/HEAD`` answering ``ref: refs/heads/...`` is unambiguous. A probe is a
 finding only when the status is 200 *and* the body looks like the real thing, so a
 catch-all "200 with the home page" server does not raise false alarms.
+
+Probes run over both HTTP and HTTPS: a correctly protected HTTPS virtual host says
+nothing about the plain-HTTP one on port 80. Connections go to the validated address;
+the hostname is used for SNI and the ``Host`` header only. Redirects are not followed.
 """
 
 from __future__ import annotations
 
+import http.client
 import re
-import urllib.error
-import urllib.request
+import ssl
 from collections.abc import Callable
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from aegisx9_scanner.log import error_name
 
 USER_AGENT = "aegisx9-scanner"
 MAX_BODY = 64 * 1024
-
-Fetcher = Callable[[str, int], "HttpResponse"]
+DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 @dataclass(frozen=True)
@@ -29,6 +33,10 @@ class HttpResponse:
     headers: dict[str, str]
     body: bytes
     error: str = ""
+
+
+Fetcher = Callable[[str, int, str], HttpResponse]
+"""``fetcher(url, timeout_seconds, address)``: ``address`` pins the TCP connection."""
 
 
 @dataclass(frozen=True)
@@ -176,49 +184,83 @@ PROBES: tuple[Probe, ...] = (
 )
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args: object, **kwargs: object) -> None:
-        return None
+def _probe_context() -> ssl.SSLContext:
+    """Content probes look at what is served, not at trust: a self-signed host that
+    serves its .git directory is still a finding. The TLS check covers trust."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
+def open_connection(
+    scheme: str, host: str, port: int, timeout: int, address: str
+) -> http.client.HTTPConnection:
+    """A connected client whose TCP peer is ``address`` and whose Host/SNI is ``host``."""
+    from aegisx9_scanner.checks.tls import open_tls
+
+    if scheme == "https":
+        conn: http.client.HTTPConnection = http.client.HTTPSConnection(host, port, timeout=timeout)
+        conn.sock = open_tls(host, port, timeout, address, _probe_context())
+        return conn
+    conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    if address:
+        import socket
+
+        conn.sock = socket.create_connection((address, port), timeout=timeout)
+    return conn
 
 
-def fetch(url: str, timeout: int) -> HttpResponse:
+def fetch(url: str, timeout: int, address: str = "") -> HttpResponse:
     """GET without following redirects; the body is capped. The URL comes from the
     configured target list and the fixed probe table (http/https only)."""
-    if not url.startswith(("http://", "https://")):
+    parts = urlsplit(url)
+    if parts.scheme not in DEFAULT_PORTS or not parts.hostname:
         return HttpResponse(status=0, headers={}, body=b"", error="ValueError")
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})  # noqa: S310
+    host = parts.hostname
+    port = parts.port or DEFAULT_PORTS[parts.scheme]
+    path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
     try:
-        with _OPENER.open(req, timeout=timeout) as resp:
-            return HttpResponse(
-                status=resp.status,
-                headers={k.lower(): v for k, v in resp.getheaders()},
-                body=resp.read(MAX_BODY),
-            )
-    except urllib.error.HTTPError as exc:
-        return HttpResponse(
-            status=exc.code, headers={k.lower(): v for k, v in exc.headers.items()}, body=b""
-        )
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+        conn = open_connection(parts.scheme, host, port, timeout, address)
+    except (OSError, ssl.SSLError, ValueError) as exc:
         return HttpResponse(status=0, headers={}, body=b"", error=error_name(exc))
+    try:
+        conn.request("GET", path, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})
+        resp = conn.getresponse()
+        return HttpResponse(
+            status=resp.status,
+            headers={k.lower(): v for k, v in resp.getheaders()},
+            body=resp.read(MAX_BODY),
+        )
+    except (OSError, ssl.SSLError, http.client.HTTPException, ValueError) as exc:
+        return HttpResponse(status=0, headers={}, body=b"", error=error_name(exc))
+    finally:
+        conn.close()
+
+
+def base_url(scheme: str, host: str, port: int | None = None) -> str:
+    netloc = f"[{host}]" if ":" in host else host
+    if port and port != DEFAULT_PORTS.get(scheme):
+        netloc = f"{netloc}:{port}"
+    return f"{scheme}://{netloc}"
 
 
 def probe_host(
     host: str,
     *,
     scheme: str = "https",
+    port: int | None = None,
+    address: str = "",
     timeout: int = 10,
     fetcher: Fetcher | None = None,
     probes: tuple[Probe, ...] = PROBES,
 ) -> list[ExposureFinding]:
-    base = f"{scheme}://{host}"
     fetcher = fetcher or fetch
+    base = base_url(scheme, host, port)
     findings: list[ExposureFinding] = []
     for probe in probes:
         url = base + probe.path
-        resp = fetcher(url, timeout)
+        resp = fetcher(url, timeout, address)
         if resp.status == 200 and probe.matcher(resp):
             findings.append(
                 ExposureFinding(

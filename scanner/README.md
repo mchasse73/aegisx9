@@ -22,7 +22,10 @@ every allow-list:
    backup archives and dumps, `/.DS_Store`, admin panels and directory listings (a
    finding only when the body is the real thing, so catch-all 200s do not false-alarm);
    nuclei exposure/config/backup/misconfiguration templates; TLS expiry, chain,
-   legacy protocol versions and security headers.
+   legacy protocol versions and security headers. Probes run over HTTP **and** HTTPS,
+   against every configured name, every address target and every web listener the
+   port scan discovered, and they connect to the validated address (the name is used
+   for SNI and the `Host` header only).
 4. **Does it still answer?** DNS expectations for named records, and HTTP
    reachability/latency every five minutes.
 
@@ -70,6 +73,7 @@ also passed to nmap as `--exclude`.
 | `CERT_EXPIRING` | medium, high under 7 days | Certificate expires in fewer than `cert_warn_days` (14) |
 | `CERT_INVALID` | high | Chain, name or validity failed verification |
 | `DNS_DRIFT` | high | A named record does not answer exactly what is expected |
+| `APPROVED_PORT_OPENED` / `PORT_CLOSED` | medium | An approved port that was not open last run, or a port that closed since: a change is reported even when it is approved, so "clean" means nothing moved |
 | `DOWN` / `DEGRADED` | high / low | Endpoint unreachable or wrong status / slower than its budget |
 | `EXPIRED_APPROVAL`, `REFUSED_TARGET`, `CHECK_INCOMPLETE` | medium, high, low-medium | Registry hygiene, never-target hits, a check that could not complete |
 | `REDTEAM_REGRESSION` | high | promptfoo attack succeeded or a garak family fell below its threshold |

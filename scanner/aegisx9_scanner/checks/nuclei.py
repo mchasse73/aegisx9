@@ -77,18 +77,24 @@ def parse_jsonl(text: str) -> list[NucleiFinding]:
     return findings
 
 
+def installed() -> bool:
+    return find_tool("nuclei") is not None
+
+
 def run_nuclei(
-    hosts: list[str],
+    urls: list[str],
     work_dir: Path,
     *,
     runner: CommandRunner | None = None,
     nuclei: str | None = None,
 ) -> NucleiResult:
+    """Run nuclei over ``urls`` (scheme included). ``ran`` is true only when the process
+    succeeded; findings from a partial run are kept but the check counts as incomplete."""
     runner = runner or (lambda argv, timeout: run_command(argv, timeout))
     nuclei = nuclei or find_tool("nuclei")
     result = NucleiResult(findings=[], ran=False, notes=[])
-    if not hosts:
-        result.notes.append("no hosts for nuclei")
+    if not urls:
+        result.notes.append("no urls for nuclei")
         return result
     if nuclei is None:
         result.notes.append("nuclei not installed: template scan skipped")
@@ -96,15 +102,14 @@ def run_nuclei(
     work_dir.mkdir(parents=True, exist_ok=True)
     targets_file = work_dir / "nuclei-targets.txt"
     output = work_dir / "nuclei.jsonl"
-    targets_file.write_text("".join(f"https://{h}\n" for h in hosts), encoding="utf-8")
-    if output.exists():
-        output.unlink()
+    targets_file.write_text("".join(f"{u}\n" for u in urls), encoding="utf-8")
+    output.unlink(missing_ok=True)
     res = runner(nuclei_argv(nuclei, targets_file, output), NUCLEI_TIMEOUT_S)
-    if res.returncode != 0:
-        result.notes.append(f"nuclei exited {res.returncode}")
     if output.exists():
         result.findings = parse_jsonl(output.read_text(encoding="utf-8"))
-        result.ran = True
-    elif res.returncode == 0:
+    if res.returncode == 0:
         result.ran = True  # no output file means no matches
+    else:
+        partial = " (partial findings kept)" if result.findings else ""
+        result.notes.append(f"nuclei exited {res.returncode}{partial}")
     return result

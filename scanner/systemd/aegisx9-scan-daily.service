@@ -24,7 +24,7 @@ EnvironmentFile=/etc/aegisx9-scanner/env
 # under $CREDENTIALS_DIRECTORY (%d). The scanner only ever sees a *_FILE path.
 LoadCredential=webhook_secret:/etc/aegisx9-scanner/webhook_secret
 Environment=AEGISX9_SCANNER_WEBHOOK_SECRET_FILE=%d/webhook_secret
-ExecStart=/opt/aegisx9-scanner/venv/bin/aegisx9-scan daily --config /etc/aegisx9-scanner --state /var/lib/aegisx9-scanner
+ExecStart=/opt/aegisx9-scanner/venv/bin/aegisx9-scan --config /etc/aegisx9-scanner --state /var/lib/aegisx9-scanner daily
 TimeoutStartSec=3h
 StateDirectory=aegisx9-scanner
 LogsDirectory=aegisx9-scanner

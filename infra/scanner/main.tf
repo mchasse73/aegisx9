@@ -43,8 +43,8 @@ locals {
     redteam_model            = var.redteam_model
     alert_min_severity       = var.alert_min_severity
     vault_aws_auth_enabled   = var.vault_aws_auth_enabled
-    vault_address            = coalesce(var.vault_address, "")
-    vault_auth_role          = coalesce(var.vault_auth_role, "")
+    vault_address            = var.vault_address == null ? "" : var.vault_address
+    vault_auth_role          = var.vault_auth_role == null ? "" : var.vault_auth_role
   })
 }
 
@@ -98,12 +98,31 @@ resource "aws_iam_role" "scanner" {
   tags               = local.tags
 }
 
-resource "aws_iam_role_policy_attachment" "ssm_core" {
-  role       = aws_iam_role.scanner.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
+# AmazonSSMManagedInstanceCore is deliberately NOT attached: it grants
+# ssm:GetParameter(s) on every parameter in the account, and IAM allows are additive,
+# so the path-scoped statement below would not restrict it. "SessionManagerAgent"
+# carries only what the SSM agent needs for Session Manager.
 data "aws_iam_policy_document" "scanner" {
+  # checkov:skip=CKV_AWS_355:the SSM agent and Session Manager actions below do not support resource-level permissions
+  # checkov:skip=CKV_AWS_290:ssm:UpdateInstanceInformation is the agent heartbeat; it has no resource constraint
+  statement {
+    sid = "SessionManagerAgent"
+    actions = [
+      "ssm:UpdateInstanceInformation",
+      "ssmmessages:CreateControlChannel",
+      "ssmmessages:CreateDataChannel",
+      "ssmmessages:OpenControlChannel",
+      "ssmmessages:OpenDataChannel",
+      "ec2messages:AcknowledgeMessage",
+      "ec2messages:DeleteMessage",
+      "ec2messages:FailMessage",
+      "ec2messages:GetEndpoint",
+      "ec2messages:GetMessages",
+      "ec2messages:SendReply",
+    ]
+    resources = ["*"]
+  }
+
   statement {
     sid       = "SendReportsFromOneIdentity"
     actions   = ["ses:SendEmail", "ses:SendRawEmail"]

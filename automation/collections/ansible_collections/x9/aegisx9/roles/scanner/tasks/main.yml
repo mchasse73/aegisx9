@@ -117,9 +117,9 @@
   ansible.builtin.command:
     argv:
       - "{{ scanner_venv }}/bin/aegisx9-scan"
-      - validate-config
       - --config
       - "{{ scanner_config_dir }}"
+      - validate-config
   changed_when: false
 
 - name: Flush handlers so systemd sees the units before they are enabled

@@ -43,7 +43,9 @@ scanner_targets:
     - 203.0.113.0/27
   dns: []
   uptime:
-    - https://www.example.com/
+    - url: https://www.example.com/
+      expect_status: 200
+      max_latency_ms: 3000
 
 # Never-target deny list (rendered to never_target.yml). Live-trading endpoints and
 # anything else that must never be scanned or loaded. Checked before every scan.

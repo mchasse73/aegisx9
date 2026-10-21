@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -131,10 +132,19 @@ def _cell(text: str) -> str:
 
 
 def _write_private(path: Path, text: str) -> None:
+    """Write a 0600 file atomically: a private temporary file in the same directory,
+    then ``os.replace``. The three units run as different users and share
+    ``last_report.json``; replacing the directory entry needs only a writable
+    directory, whereas truncating another user's 0600 file would fail."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(text)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def write_report(report: Report, state_dir: Path) -> tuple[Path, Path]:

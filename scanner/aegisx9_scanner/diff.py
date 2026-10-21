@@ -33,6 +33,7 @@ class Kind(StrEnum):
     CHECK_INCOMPLETE = "CHECK_INCOMPLETE"
     REDTEAM_REGRESSION = "REDTEAM_REGRESSION"
     PORT_CLOSED = "PORT_CLOSED"
+    APPROVED_PORT_OPENED = "APPROVED_PORT_OPENED"
 
 
 class Severity(StrEnum):
@@ -94,6 +95,7 @@ class Observation:
     ports_scanned: bool = False
     udp_scanned: bool = False
     nuclei_ran: bool = False
+    nuclei_expected: bool = False  # nuclei is installed and enabled, so it must complete
 
     def hostnames_for(self, ip: str) -> list[str]:
         if self.targets is None:
@@ -161,9 +163,23 @@ def classify(
         approved = registry.is_approved(None, port.ip, port.port, port.proto, today) or any(
             registry.is_approved(h, None, port.port, port.proto, today) for h in hosts
         )
-        if approved:
-            continue
         is_new = key not in prev_ports
+        if approved:
+            # Approved, but a change against the last run is still a change: a run is
+            # only "clean" when nothing moved.
+            if prev_scanned and is_new:
+                alerts.append(
+                    Alert(
+                        Kind.APPROVED_PORT_OPENED,
+                        Severity.MEDIUM,
+                        label,
+                        f"{port.proto}/{port.port} ({port.service or 'unknown'}) is approved "
+                        "but was not open last run",
+                        port.port,
+                        port.proto,
+                    )
+                )
+            continue
         if not known:
             alerts.append(
                 Alert(
@@ -195,7 +211,7 @@ def classify(
             alerts.append(
                 Alert(
                     Kind.PORT_CLOSED,
-                    Severity.INFO,
+                    Severity.MEDIUM,
                     ip,
                     f"{proto}/{port_s} was open last run and is closed now",
                     int(port_s),
@@ -225,12 +241,12 @@ def classify(
             )
         )
     for dns in obs.dns:
-        if dns.error:
-            alerts.append(
-                Alert(
-                    Kind.CHECK_INCOMPLETE, Severity.LOW, dns.name, f"dns lookup error ({dns.error})"
-                )
-            )
+        if dns.error or not dns.supported:
+            # A configured check that did not happen is never "clean".
+            why = f"dns lookup error ({dns.error})" if dns.error else "dns lookup unsupported"
+            if dns.notes:
+                why += ": " + "; ".join(dns.notes)
+            alerts.append(Alert(Kind.CHECK_INCOMPLETE, Severity.MEDIUM, dns.name, why))
         elif dns.drifted:
             alerts.append(
                 Alert(
@@ -255,6 +271,10 @@ def classify(
                 "port-scan",
                 "the port scan did not complete",
             )
+        )
+    if obs.nuclei_expected and not obs.nuclei_ran:
+        alerts.append(
+            Alert(Kind.CHECK_INCOMPLETE, Severity.MEDIUM, "nuclei", "nuclei did not complete")
         )
     return alerts
 

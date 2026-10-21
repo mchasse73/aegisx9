@@ -22,7 +22,7 @@ Environment=AEGISX9_SCANNER_WEBHOOK_SECRET_FILE=%d/webhook_secret
 Environment=AEGISX9_SCANNER_REDTEAM_KEY_FILE=%d/redteam_key
 # promptfoo + garak configs from this repository, installed at the pinned ref.
 Environment=AEGISX9_SCANNER_REDTEAM_SUITE_DIR=/opt/aegisx9-scanner/redteam
-ExecStart=/opt/aegisx9-scanner/venv/bin/aegisx9-scan redteam --config /etc/aegisx9-scanner --state /var/lib/aegisx9-scanner
+ExecStart=/opt/aegisx9-scanner/venv/bin/aegisx9-scan --config /etc/aegisx9-scanner --state /var/lib/aegisx9-scanner redteam
 TimeoutStartSec=2h
 ReadWritePaths=/var/lib/aegisx9-scanner /var/log/aegisx9-scanner
 CacheDirectory=aegisx9-scanner-redteam
