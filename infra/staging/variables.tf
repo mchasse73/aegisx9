@@ -28,3 +28,9 @@ variable "idp_redirect_uris" {
   description = "OIDC redirect URIs for staging."
   type        = list(string)
 }
+
+variable "environment_reviewers_enabled" {
+  description = "Attach required reviewers to the GitHub environment (needs a public repository or a paid plan)."
+  type        = bool
+  default     = false
+}

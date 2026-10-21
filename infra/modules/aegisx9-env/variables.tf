@@ -79,6 +79,12 @@ variable "manage_branch_protection" {
   default     = false
 }
 
+variable "environment_reviewers_enabled" {
+  description = "Attach required reviewers to the GitHub environment (needs a public repository or a paid plan)."
+  type        = bool
+  default     = false
+}
+
 variable "required_status_checks" {
   description = "CI job names required before merging to main."
   type        = list(string)
