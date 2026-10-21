@@ -1,0 +1,17 @@
+---
+- name: Validate the activation fields from the event
+  ansible.builtin.assert:
+    that:
+      - breakglass_action in ['record', 'expire']
+      - breakglass_activation_id is match('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+      - breakglass_who is match('^[A-Za-z0-9@._-]{1,128}$')
+    fail_msg: breakglass_activation_id must be a UUID and breakglass_who a short identity name
+    quiet: true
+
+- name: Record the event
+  ansible.builtin.include_tasks: record.yml
+  when: breakglass_action == 'record'
+
+- name: Run the window expiry
+  ansible.builtin.include_tasks: expire.yml
+  when: breakglass_action == 'expire'

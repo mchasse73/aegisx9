@@ -1,0 +1,483 @@
+#!/usr/bin/env python3
+"""handoff-sync: move break-glass work back to the central workspace, then wipe it.
+
+What it does, in order:
+
+1. Bundles ``~/.claude/projects``, ``~/.aegisx9/handoff`` and ``~/.aegisx9/memory`` into
+   a tar inside a 0700 temporary directory, with a size/sha256 manifest.
+2. Scans the staged copy with ``gitleaks detect --no-git --redact``. Any finding stops
+   the upload; only file names and counts are shown.
+3. Uploads with rsync over ssh to the central workspace (``--to coder:<workspace>``
+   after ``coder config-ssh``, or ``--to ssh:<host>``): session ``.jsonl`` files with
+   ``--ignore-existing`` (append-only union), everything else with ``--update``.
+4. Verifies by reading the remote manifest before and after the upload.
+5. On success shreds the bundle and the synced local session files (``shred -u``, or an
+   overwrite + unlink fallback), then runs ``vault token revoke -self``.
+6. Records a ``breakglass_sync`` event the same way breakglass-login records activation.
+
+``--dry-run`` stops after step 3's rsync dry run; ``--keep-local`` skips the shredding.
+``--to dir:<path>`` syncs into a local directory (rehearsal and tests). Errors print the
+exception type name only. Standard library only; Python 3.12.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+SOURCES = (".claude/projects", ".aegisx9/handoff", ".aegisx9/memory")
+SESSION_SUFFIX = ".jsonl"
+EVENT_NAME = "breakglass_sync"
+TARGET_RE = re.compile(r"^[A-Za-z0-9._@-]{1,128}$")
+CHUNK = 1 << 20
+
+Manifest = dict[str, dict[str, Any]]
+
+
+class SyncError(Exception):
+    """A problem whose message is safe to print (contains no paths from errors)."""
+
+
+class LeaksFound(SyncError):
+    def __init__(self, counts: Mapping[str, int]) -> None:
+        super().__init__("gitleaks findings")
+        self.counts = dict(counts)
+
+
+def log(message: str) -> None:
+    print(f"handoff-sync: {message}", file=sys.stderr)
+
+
+# --- target ------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Target:
+    kind: str
+    name: str
+
+    @classmethod
+    def parse(cls, spec: str) -> Target:
+        kind, sep, name = spec.partition(":")
+        if not sep or kind not in {"coder", "ssh", "dir"} or not name:
+            raise SyncError("--to must be coder:<workspace>, ssh:<host> or dir:<path>")
+        if kind != "dir" and not TARGET_RE.fullmatch(name):
+            raise SyncError("workspace or host name contains unexpected characters")
+        return cls(kind, name)
+
+    @property
+    def host(self) -> str | None:
+        if self.kind == "coder":
+            return f"coder.{self.name}"  # alias created by `coder config-ssh`
+        if self.kind == "ssh":
+            return self.name
+        return None
+
+    @property
+    def rsync_dest(self) -> str:
+        host = self.host
+        return f"{host}:" if host else str(Path(self.name)) + "/"
+
+
+# --- collect, stage, manifest ----------------------------------------------------------------
+
+
+def is_session(rel: Path) -> bool:
+    return rel.parts[:2] == (".claude", "projects") and rel.suffix == SESSION_SUFFIX
+
+
+def collect(home: Path) -> list[Path]:
+    """Regular files under the handoff sources, relative to home, sorted. No symlinks."""
+    found: list[Path] = []
+    for src in SOURCES:
+        base = home / src
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            if path.is_file() and not path.is_symlink():
+                found.append(path.relative_to(home))
+    return found
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(CHUNK), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def manifest(root: Path, rels: Iterable[Path]) -> Manifest:
+    """Size and sha256 of every listed file that exists under root."""
+    out: Manifest = {}
+    for rel in rels:
+        path = root / rel
+        if path.is_file():
+            out[rel.as_posix()] = {"size": path.stat().st_size, "sha256": sha256_file(path)}
+    return out
+
+
+def stage(home: Path, rels: Iterable[Path], workdir: Path) -> tuple[Path, Path]:
+    """Copy the files into workdir/stage (mtimes kept) and tar them. Returns (stage, tar)."""
+    staged = workdir / "stage"
+    staged.mkdir(mode=0o700)
+    for rel in rels:
+        dest = staged / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(home / rel, dest)
+        dest.chmod(0o600)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    bundle = workdir / f"handoff-{stamp}.tar"
+    with tarfile.open(bundle, "w") as tar:
+        for rel in rels:
+            tar.add(staged / rel, arcname=rel.as_posix(), recursive=False)
+    bundle.chmod(0o600)
+    (workdir / "manifest.json").write_text(json.dumps(manifest(staged, rels), indent=2))
+    return staged, bundle
+
+
+# --- gitleaks ---------------------------------------------------------------------------------
+
+
+def scan(staged: Path, workdir: Path) -> None:
+    """Run gitleaks over the staged copy; raise LeaksFound with per-file counts."""
+    gitleaks = shutil.which("gitleaks")
+    if gitleaks is None:
+        raise SyncError("gitleaks is not installed; refusing to upload unscanned files")
+    report = workdir / "gitleaks.json"
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        [
+            gitleaks,
+            "detect",
+            "--no-git",
+            "--source",
+            str(staged),
+            "--redact",
+            "--report-format",
+            "json",
+            "--report-path",
+            str(report),
+            "--exit-code",
+            "1",
+        ],
+        capture_output=True,
+        check=False,
+    )
+    findings: list[dict[str, Any]] = []
+    if report.is_file():
+        try:
+            loaded = json.loads(report.read_text(encoding="utf-8") or "[]")
+            findings = loaded if isinstance(loaded, list) else []
+        finally:
+            shred_file(report)
+    if result.returncode not in (0, 1):
+        raise SyncError(f"gitleaks failed with exit code {result.returncode}")
+    counts: dict[str, int] = {}
+    for finding in findings:
+        name = str(finding.get("File", "?"))
+        try:
+            name = Path(name).relative_to(staged).as_posix()
+        except ValueError:
+            name = Path(name).name
+        counts[name] = counts.get(name, 0) + 1
+    if result.returncode == 1 or counts:
+        raise LeaksFound(counts)
+
+
+# --- transfer and verification --------------------------------------------------------------
+
+
+def rsync(
+    staged: Path, target: Target, rels: list[Path], flags: list[str], dry_run: bool
+) -> list[str]:
+    """One rsync pass for the listed files. Returns the itemized output lines."""
+    if not rels:
+        return []
+    binary = shutil.which("rsync")
+    if binary is None:
+        raise SyncError("rsync is not installed")
+    with tempfile.NamedTemporaryFile("w", dir=staged.parent, delete=False, suffix=".list") as fh:
+        fh.write("".join(f"{rel.as_posix()}\n" for rel in rels))
+        listing = Path(fh.name)
+    try:
+        argv = [binary, "-a", "--chmod=D700,F600", "--itemize-changes", f"--files-from={listing}"]
+        argv += flags
+        if dry_run:
+            argv.append("--dry-run")
+        if target.host:
+            argv += ["-e", "ssh -o BatchMode=yes"]
+        argv += [str(staged) + "/", target.rsync_dest]
+        result = subprocess.run(argv, capture_output=True, text=True, check=False)  # noqa: S603
+    finally:
+        listing.unlink(missing_ok=True)
+    if result.returncode != 0:
+        raise SyncError(f"rsync exited {result.returncode}")
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def upload(staged: Path, target: Target, rels: list[Path], dry_run: bool) -> list[str]:
+    sessions = [r for r in rels if is_session(r)]
+    notes = [r for r in rels if not is_session(r)]
+    lines = rsync(staged, target, sessions, ["--ignore-existing"], dry_run)
+    lines += rsync(staged, target, notes, ["--update"], dry_run)
+    return lines
+
+
+REMOTE_MANIFEST = r"""
+import hashlib, json, os, sys
+rels = json.loads(sys.stdin.readline())
+home = os.path.expanduser("~")
+out = {}
+for rel in rels:
+    path = os.path.join(home, rel)
+    if os.path.isfile(path) and not os.path.islink(path):
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                h.update(block)
+        out[rel] = {"size": os.path.getsize(path), "sha256": h.hexdigest()}
+print(json.dumps(out))
+"""
+
+
+def remote_manifest(target: Target, rels: list[Path]) -> Manifest:
+    if target.host is None:
+        return manifest(Path(target.name), rels)
+    ssh = shutil.which("ssh")
+    if ssh is None:
+        raise SyncError("ssh is not installed")
+    names = [r.as_posix() for r in rels]
+    # The script arrives on stdin together with its input line; nothing is on argv.
+    stdin = f"{json.dumps(names)}\n"
+    result = subprocess.run(  # noqa: S603
+        [ssh, "-o", "BatchMode=yes", target.host, "--", "python3", "-c", REMOTE_MANIFEST],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SyncError(f"remote manifest failed (ssh exited {result.returncode})")
+    loaded = json.loads(result.stdout or "{}")
+    if not isinstance(loaded, dict):
+        raise SyncError("remote manifest is not an object")
+    return {k: v for k, v in loaded.items() if isinstance(v, dict)}
+
+
+def verify(local: Manifest, before: Manifest, after: Manifest) -> list[str]:
+    """Each file must now match the local copy, or be the untouched pre-existing remote copy."""
+    problems: list[str] = []
+    for rel, entry in local.items():
+        remote = after.get(rel)
+        if remote is None:
+            problems.append(f"{rel}: missing after upload")
+        elif remote == entry:
+            continue
+        elif rel in before and before[rel] == remote:
+            continue  # remote copy kept on purpose (union / newer-wins)
+        else:
+            problems.append(f"{rel}: remote content matches neither local nor previous")
+    return problems
+
+
+# --- wipe, revoke, event ------------------------------------------------------------------------
+
+
+def shred_file(path: Path) -> None:
+    """Destroy a file: shred -u when available, else overwrite with random bytes and unlink."""
+    if not path.exists() or path.is_symlink():
+        path.unlink(missing_ok=True)
+        return
+    shred = shutil.which("shred")
+    if shred is not None:
+        done = subprocess.run([shred, "-u", "-z", str(path)], capture_output=True, check=False)  # noqa: S603
+        if done.returncode == 0 and not path.exists():
+            return
+    size = path.stat().st_size
+    with open(path, "r+b") as fh:
+        remaining = size
+        while remaining > 0:
+            block = os.urandom(min(CHUNK, remaining))
+            fh.write(block)
+            remaining -= len(block)
+        fh.flush()
+        os.fsync(fh.fileno())
+    path.unlink()
+
+
+def wipe_tree(root: Path) -> None:
+    for path in sorted(root.rglob("*"), reverse=True):
+        if path.is_file() or path.is_symlink():
+            shred_file(path)
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def revoke_vault_token() -> bool:
+    vault = shutil.which("vault")
+    if vault is None:
+        log("vault CLI not found; revoke the break-glass token by hand")
+        return False
+    done = subprocess.run([vault, "token", "revoke", "-self"], capture_output=True, check=False)  # noqa: S603
+    if done.returncode != 0:
+        log("vault token revoke -self failed; revoke it by hand")
+        return False
+    log("break-glass Vault token revoked")
+    return True
+
+
+def emit_event(payload: Mapping[str, Any], state_dir: Path) -> bool:
+    helper = Path(__file__).resolve().parent / "aegisx9-event"
+    done = subprocess.run(  # noqa: S603
+        [sys.executable, str(helper), "--spool", str(state_dir / "outbox")],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    for line in done.stderr.splitlines():
+        log(line.strip())
+    return done.returncode == 0
+
+
+def load_activation(state_dir: Path) -> dict[str, Any]:
+    path = state_dir / "activation.json"
+    if not path.is_file():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log(f"activation record unreadable ({type(exc).__name__})")
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+# --- main ---------------------------------------------------------------------------------------
+
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--to",
+        default=os.environ.get("AEGISX9_SYNC_TARGET", ""),
+        help="coder:<workspace>, ssh:<host> or dir:<path> (default: $AEGISX9_SYNC_TARGET)",
+    )
+    ap.add_argument("--home", type=Path, default=Path.home(), help=argparse.SUPPRESS)
+    ap.add_argument(
+        "--dry-run", action="store_true", help="bundle, scan and show the transfer only"
+    )
+    ap.add_argument("--keep-local", action="store_true", help="do not shred the local copies")
+    ap.add_argument(
+        "--tmp-dir", type=Path, default=None, help="where the 0700 work directory is created"
+    )
+    return ap.parse_args(argv)
+
+
+def run(args: argparse.Namespace) -> int:
+    target = Target.parse(args.to)
+    home: Path = args.home.resolve()
+    state_dir = Path(
+        os.environ.get("AEGISX9_BREAKGLASS_DIR", str(home / ".aegisx9" / "breakglass"))
+    )
+    activation = load_activation(state_dir)
+    event: dict[str, Any] = {
+        "event": EVENT_NAME,
+        "activation_id": activation.get("activation_id", ""),
+        "who": activation.get("who", ""),
+        "target": target.kind,
+        "dry_run": bool(args.dry_run),
+        "keep_local": bool(args.keep_local),
+    }
+
+    rels = collect(home)
+    if not rels:
+        log("nothing to sync")
+        return 0
+    sessions = [r for r in rels if is_session(r)]
+    log(f"{len(rels)} files ({len(sessions)} session files) from {len(SOURCES)} sources")
+
+    workdir = Path(tempfile.mkdtemp(prefix="handoff-", dir=args.tmp_dir))  # mkdtemp => 0700
+    try:
+        staged, bundle = stage(home, rels, workdir)
+        local = manifest(staged, rels)
+        event["files"] = len(rels)
+        event["bytes"] = sum(int(e["size"]) for e in local.values())
+        try:
+            scan(staged, workdir)
+        except LeaksFound as leaks:
+            log("gitleaks found possible secrets; nothing was uploaded:")
+            for name, count in sorted(leaks.counts.items()):
+                log(f"  {name}: {count}")
+            event["result"] = "refused_leaks"
+            event["findings"] = sum(leaks.counts.values())
+            emit_event(event, state_dir)
+            return 3
+        log("gitleaks: clean")
+
+        before = remote_manifest(target, rels)
+        for line in upload(staged, target, rels, args.dry_run):
+            log(f"  {line}")
+        if args.dry_run:
+            log("dry run: nothing uploaded, nothing wiped, token kept")
+            event["result"] = "dry_run"
+            emit_event(event, state_dir)
+            return 0
+
+        after = remote_manifest(target, rels)
+        problems = verify(local, before, after)
+        if problems:
+            for problem in problems:
+                log(f"verify: {problem}")
+            log("verification failed; local copies kept, token kept")
+            event["result"] = "verify_failed"
+            event["problems"] = len(problems)
+            emit_event(event, state_dir)
+            return 4
+        log(f"verified {len(after)} files on the central workspace")
+
+        if args.keep_local:
+            log("--keep-local: local session files kept")
+        else:
+            for rel in sessions:
+                shred_file(home / rel)
+            shred_file(bundle)
+            log(f"wiped the bundle and {len(sessions)} local session files")
+        event["result"] = "ok"
+        event["revoked"] = revoke_vault_token()
+        if not emit_event(event, state_dir):
+            log("sync done, but the breakglass_sync event was not recorded;")
+            log("check AEGISX9_EVENT_URL and AEGISX9_EVENT_HMAC_FILE, then aegisx9-event --flush")
+            return 5
+        return 0
+    finally:
+        wipe_tree(workdir)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    try:
+        return run(args)
+    except SyncError as exc:
+        log(str(exc))
+        return 2
+    except Exception as exc:
+        log(f"failed ({type(exc).__name__})")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

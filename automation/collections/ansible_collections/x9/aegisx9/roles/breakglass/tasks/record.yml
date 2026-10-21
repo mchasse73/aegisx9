@@ -1,0 +1,90 @@
+---
+# One ledger issue per activation (title carries the activation id); every event is a
+# comment on it. The GitHub token comes from the AAP credential, never from a variable.
+- name: Validate the event kind
+  ansible.builtin.assert:
+    that:
+      - breakglass_event in ['activation', 'sync', 'expiry']
+    fail_msg: breakglass_event must be activation, sync or expiry
+    quiet: true
+
+- name: Find the ledger issue for this activation
+  ansible.builtin.uri:
+    url: "https://api.github.com/search/issues?q={{ ('repo:' ~ breakglass_repository ~ ' in:title ' ~ breakglass_activation_id) | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.env', 'AEGISX9_GITHUB_TOKEN') }}"
+      Accept: application/vnd.github+json
+    status_code: 200
+  register: breakglass_search
+  no_log: true
+
+- name: Open the ledger issue (first event for this activation)
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ breakglass_repository }}/issues"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.env', 'AEGISX9_GITHUB_TOKEN') }}"
+      Accept: application/vnd.github+json
+    body_format: json
+    body:
+      title: "[break-glass] {{ breakglass_who }} {{ breakglass_activation_id }}"
+      body: |
+        Break-glass local workspace ledger.
+        Developer (Vault entity): {{ breakglass_who }}
+        Activation: {{ breakglass_activation_id }}
+        Events are appended as comments by Event-Driven Ansible.
+      labels: [break-glass, audit]
+    status_code: 201
+  register: breakglass_new_issue
+  when: breakglass_search.json.total_count | int == 0
+  no_log: true
+
+- name: Resolve the ledger issue number
+  ansible.builtin.set_fact:
+    breakglass_issue_number: >-
+      {{ (breakglass_search.json['items'] | first).number
+         if breakglass_search.json.total_count | int > 0
+         else breakglass_new_issue.json.number }}
+
+- name: Compose the ledger entry
+  ansible.builtin.set_fact:
+    breakglass_entry: "{{ breakglass_entries[breakglass_event] }}"
+  vars:
+    breakglass_entries:
+      activation: >-
+        **Window opened** at {{ breakglass_started_at }} for {{ breakglass_window_hours }} h
+        (until {{ breakglass_expires_at }}), device {{ breakglass_device }}.
+      sync: >-
+        **Sync** result `{{ breakglass_result }}`: {{ breakglass_files }} files,
+        {{ breakglass_bytes }} bytes; token revoked: {{ breakglass_revoked }}.
+      expiry: >-
+        **Window expired**: token revoked by the expiry job (result `{{ breakglass_result }}`).
+
+- name: Append the event to the ledger issue
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ breakglass_repository }}/issues/{{ breakglass_issue_number }}/comments"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.env', 'AEGISX9_GITHUB_TOKEN') }}"
+      Accept: application/vnd.github+json
+    body_format: json
+    body:
+      body: "{{ breakglass_entry }}"
+    status_code: 201
+  no_log: true
+
+- name: Close the ledger issue when the window is over
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ breakglass_repository }}/issues/{{ breakglass_issue_number }}"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.env', 'AEGISX9_GITHUB_TOKEN') }}"
+      Accept: application/vnd.github+json
+    body_format: json
+    body:
+      state: closed
+      state_reason: completed
+    status_code: 200
+  when: breakglass_event == 'expiry' or (breakglass_event == 'sync' and breakglass_result == 'ok')
+  no_log: true

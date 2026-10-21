@@ -1,0 +1,58 @@
+---
+# The job template "AegisX9 - Break-glass window" is the expiry timer: it waits until the
+# declared end of the window, then revokes the token by accessor. Vault's own token TTL on
+# the aegisx9-breakglass role is the backstop if this job never runs.
+- name: Validate the window fields (accessor is never printed)
+  ansible.builtin.assert:
+    that:
+      - breakglass_token_accessor is match('^[A-Za-z0-9._-]{8,128}$')
+      - breakglass_expires_at is match('^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\+00:00|Z)$')
+    fail_msg: breakglass_token_accessor and breakglass_expires_at (UTC ISO 8601) are required
+    quiet: true
+  no_log: true
+
+- name: Read the current time (UTC epoch)
+  ansible.builtin.command:
+    argv: [date, -u, +%s]
+  register: breakglass_now
+  changed_when: false
+
+- name: Compute how long to wait (capped at breakglass_max_window_hours)
+  ansible.builtin.set_fact:
+    breakglass_wait_seconds: >-
+      {{ [[((breakglass_expires_at | regex_replace('Z$', '+00:00')
+            | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp() | int)
+          - (breakglass_now.stdout | int), 0] | max,
+          breakglass_max_window_hours | int * 3600] | min }}
+
+- name: Wait for the declared window to end
+  ansible.builtin.wait_for:
+    timeout: "{{ breakglass_wait_seconds | int }}"
+  when: breakglass_wait_seconds | int > 0
+
+- name: Look the token up by accessor (fails if handoff-sync already revoked it)
+  community.hashi_vault.vault_write:
+    path: "{{ breakglass_vault_token_path }}/lookup-accessor"
+    data:
+      accessor: "{{ breakglass_token_accessor }}"
+  register: breakglass_lookup
+  failed_when: false
+  no_log: true
+
+- name: Revoke the break-glass token by accessor
+  community.hashi_vault.vault_write:
+    path: "{{ breakglass_vault_token_path }}/revoke-accessor"
+    data:
+      accessor: "{{ breakglass_token_accessor }}"
+  register: breakglass_revoke
+  retries: 5
+  delay: 30
+  until: breakglass_revoke is succeeded
+  when: breakglass_lookup is succeeded
+  no_log: true
+
+- name: Record the expiry on the ledger
+  ansible.builtin.include_tasks: record.yml
+  vars:
+    breakglass_event: expiry
+    breakglass_result: "{{ 'revoked' if breakglass_lookup is succeeded else 'already_revoked' }}"

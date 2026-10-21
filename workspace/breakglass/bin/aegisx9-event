@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Deliver a break-glass event to the Event-Driven Ansible event stream, HMAC-signed.
+
+The event (a JSON object with an ``event`` field) is read from stdin. Configuration
+comes from the environment only:
+
+* ``AEGISX9_EVENT_URL``        https URL of the event stream.
+* ``AEGISX9_EVENT_HMAC_FILE``  path of a 0600 file holding the shared HMAC key.
+
+The key never appears on a command line, in output or in an error. If the stream is
+unreachable (the central platform may be the reason the laptop is in break-glass mode)
+the event is spooled to ``--spool DIR`` and delivered on the next call; ``--flush`` only
+delivers the spool. Errors print the exception type name, never the message or a URL.
+
+Exit codes: 0 delivered or spooled, 1 delivery failed and no spool, 2 bad input/config.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import hmac
+import json
+import os
+import re
+import stat
+import sys
+import urllib.request
+import uuid
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+SIGNATURE_HEADER = "X-AegisX9-Signature"
+EVENT_HEADER = "X-AegisX9-Event"
+EVENT_RE = r"^[a-z][a-z0-9_]{2,63}$"
+
+
+class EventError(Exception):
+    """Configuration or input problem; the message is safe to print."""
+
+
+def log(message: str) -> None:
+    print(f"aegisx9-event: {message}", file=sys.stderr)
+
+
+def load_key(path: Path) -> bytes:
+    """Read the HMAC key from a file that only its owner can read."""
+    mode = path.stat().st_mode
+    if not stat.S_ISREG(mode) or mode & (stat.S_IRWXG | stat.S_IRWXO):
+        raise EventError("hmac key file must be a regular file with mode 0600")
+    key = path.read_bytes().strip()
+    if len(key) < 32:
+        raise EventError("hmac key file is too short (need at least 32 bytes)")
+    return key
+
+
+def canonical(event: Mapping[str, Any]) -> bytes:
+    return json.dumps(event, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def sign(body: bytes, key: bytes) -> str:
+    return "sha256=" + hmac.new(key, body, hashlib.sha256).hexdigest()
+
+
+def validate(event: Any) -> dict[str, Any]:
+    if not isinstance(event, dict):
+        raise EventError("event must be a JSON object")
+    name = event.get("event")
+    if not isinstance(name, str) or not re.fullmatch(EVENT_RE, name):
+        raise EventError("event.event must be a short snake_case name")
+    out: dict[str, Any] = dict(event)
+    out.setdefault("event_id", str(uuid.uuid4()))
+    out.setdefault("sent_at", datetime.now(UTC).isoformat(timespec="seconds"))
+    out.setdefault("source", "aegisx9-breakglass")
+    return out
+
+
+def post(url: str, event: Mapping[str, Any], key: bytes, timeout: float = 15.0) -> int:
+    """POST the signed event; returns the HTTP status. Raises on transport failure."""
+    if not url.startswith("https://"):
+        raise EventError("AEGISX9_EVENT_URL must be an https:// URL")
+    body = canonical(event)
+    req = urllib.request.Request(  # noqa: S310 - scheme checked above
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            SIGNATURE_HEADER: sign(body, key),
+            EVENT_HEADER: str(event["event"]),
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310  # nosemgrep
+        return int(resp.status)
+
+
+def spool_write(spool: Path, event: Mapping[str, Any]) -> Path:
+    spool.mkdir(parents=True, exist_ok=True)
+    spool.chmod(0o700)
+    path = spool / f"{event['event_id']}.json"
+    with open(path, "w", encoding="utf-8", opener=lambda p, f: os.open(p, f, 0o600)) as fh:
+        fh.write(canonical(event).decode("utf-8"))
+    return path
+
+
+def spool_flush(spool: Path, url: str, key: bytes) -> tuple[int, int]:
+    """Deliver spooled events oldest first. Returns (delivered, remaining)."""
+    if not spool.is_dir():
+        return 0, 0
+    delivered = 0
+    pending = sorted(spool.glob("*.json"), key=lambda p: p.stat().st_mtime)
+    for path in pending:
+        try:
+            event = json.loads(path.read_text(encoding="utf-8"))
+            post(url, event, key)
+        except Exception as exc:
+            log(f"spooled event not delivered ({type(exc).__name__}); kept")
+            return delivered, len(pending) - delivered
+        path.unlink()
+        delivered += 1
+    return delivered, 0
+
+
+def deliver(event: Mapping[str, Any], url: str, key: bytes, spool: Path | None) -> int:
+    try:
+        status = post(url, event, key)
+    except Exception as exc:
+        if spool is None:
+            log(f"delivery failed ({type(exc).__name__})")
+            return 1
+        spool_write(spool, event)
+        log(f"delivery failed ({type(exc).__name__}); spooled for the next sync")
+        return 0
+    if status >= 300:
+        log(f"event stream answered HTTP {status}")
+        return 1
+    log(f"delivered {event['event']} {event['event_id']}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("--spool", type=Path, default=None, help="directory for undelivered events")
+    ap.add_argument("--flush", action="store_true", help="only deliver spooled events")
+    args = ap.parse_args(argv)
+
+    try:
+        url = os.environ.get("AEGISX9_EVENT_URL", "")
+        key_file = os.environ.get("AEGISX9_EVENT_HMAC_FILE", "")
+        if not url or not key_file:
+            raise EventError("AEGISX9_EVENT_URL and AEGISX9_EVENT_HMAC_FILE must be set")
+        key = load_key(Path(key_file))
+    except EventError as exc:
+        log(str(exc))
+        return 2
+    except Exception as exc:
+        log(f"cannot read configuration ({type(exc).__name__})")
+        return 2
+
+    if args.spool is not None:
+        delivered, remaining = spool_flush(args.spool, url, key)
+        if delivered or remaining:
+            log(f"spool: {delivered} delivered, {remaining} still queued")
+    if args.flush:
+        return 0
+
+    try:
+        event = validate(json.load(sys.stdin))
+    except EventError as exc:
+        log(str(exc))
+        return 2
+    except Exception as exc:
+        log(f"invalid event on stdin ({type(exc).__name__})")
+        return 2
+    return deliver(event, url, key, args.spool)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

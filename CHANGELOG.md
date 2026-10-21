@@ -26,6 +26,11 @@ All notable changes to this project are documented here. The format follows
   one restricted pod per developer running the signed workspace image by digest, persistent
   home, CPU/memory/team parameters, gateway and OTel environment, no provider key; the
   `signed-digest-images` Sentinel policy now also checks bare pods (refs #47).
+- Break-glass local workspace (`workspace/breakglass`): hardened devcontainer on the same
+  image, `breakglass-login` (OIDC Vault window with an HMAC-signed activation event),
+  `handoff-sync` (gitleaks-gated, append-only union sync back to the central workspace with
+  manifest verification, shred and token revoke), EDA rules and the `breakglass` role with
+  ledger and window-expiry job templates (refs #52).
 - `.gitignore` refuses credential-shaped files in the working tree (refs #33).
 - Project onboarded into the maintainer environment: repo remote, tracking issue, docs
   collection and memory (refs #33).

@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# breakglass-login: open an audited break-glass window on a local AegisX9 workspace.
+#
+# 1. Logs in to Vault with OIDC (role aegisx9-breakglass); the browser URL is printed on
+#    stderr, the token is written by the vault CLI to its own 0600 token file, never shown.
+# 2. Records an activation event (who = Vault entity name, when, declared window) and
+#    delivers it HMAC-signed to the Event-Driven Ansible event stream. If the stream is
+#    unreachable the event is spooled and sent by handoff-sync.
+#
+# Environment (nothing is taken from the command line except --hours):
+#   VAULT_ADDR                 https URL of Vault
+#   AEGISX9_EVENT_URL          https URL of the EDA event stream
+#   AEGISX9_EVENT_HMAC_FILE    0600 file holding the event-stream HMAC key
+#   AEGISX9_BREAKGLASS_DIR     state directory (default ~/.aegisx9/breakglass)
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+usage: breakglass-login [--hours N]
+
+  --hours N   declared outage window in hours (1-72, default 8). The Vault token and the
+              EDA expiry job both end the window; run handoff-sync before then.
+USAGE
+}
+
+hours=8
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --hours)
+      [ $# -ge 2 ] || { usage >&2; exit 2; }
+      hours=$2
+      shift 2
+      ;;
+    --hours=*)
+      hours=${1#*=}
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if ! [[ $hours =~ ^[0-9]+$ ]] || [ "$hours" -lt 1 ] || [ "$hours" -gt 72 ]; then
+  echo "breakglass-login: --hours must be an integer from 1 to 72" >&2
+  exit 2
+fi
+
+for v in VAULT_ADDR AEGISX9_EVENT_URL AEGISX9_EVENT_HMAC_FILE; do
+  if [ -z "${!v:-}" ]; then
+    echo "breakglass-login: $v is not set" >&2
+    exit 2
+  fi
+done
+case "$VAULT_ADDR" in
+  https://*) ;;
+  *)
+    echo "breakglass-login: VAULT_ADDR must be an https:// URL" >&2
+    exit 2
+    ;;
+esac
+for tool in vault python3; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "breakglass-login: $tool is not installed" >&2; exit 2; }
+done
+
+bin_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+state_dir=${AEGISX9_BREAKGLASS_DIR:-$HOME/.aegisx9/breakglass}
+mkdir -p "$state_dir"
+chmod 700 "$state_dir"
+
+echo "breakglass-login: complete the OIDC login in your browser (URL follows)" >&2
+# -no-print keeps the token out of the terminal; vault's own messages go to stderr.
+if ! vault login -method=oidc -no-print role=aegisx9-breakglass 1>&2; then
+  echo "breakglass-login: vault login failed" >&2
+  exit 1
+fi
+
+# Identity of the token. The lookup response contains the token itself, so it is piped
+# straight into Python and only non-secret fields are extracted; nothing is written.
+identity=$(vault token lookup -format=json | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)["data"]
+    print(json.dumps({
+        "entity_id": d.get("entity_id") or "",
+        "display_name": d.get("display_name") or "",
+        "accessor": d.get("accessor") or "",
+        "expire_time": d.get("expire_time") or "",
+    }))
+except Exception as exc:
+    print("breakglass-login: token lookup failed (" + type(exc).__name__ + ")", file=sys.stderr)
+    sys.exit(1)
+')
+
+entity_id=$(printf '%s' "$identity" | python3 -c 'import json,sys; print(json.load(sys.stdin)["entity_id"])')
+who=""
+if [ -n "$entity_id" ]; then
+  # Entity name from the identity store (the role grants read on the caller's own entity).
+  who=$(vault read -format=json "identity/entity/id/$entity_id" 2>/dev/null \
+    | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin)["data"]["name"])
+except Exception:
+    print("")' || true)
+fi
+if [ -z "$who" ]; then
+  who=$(printf '%s' "$identity" | python3 -c 'import json,sys; print(json.load(sys.stdin)["display_name"])')
+fi
+if [ -z "$who" ]; then
+  echo "breakglass-login: could not determine the Vault identity; revoking the token" >&2
+  vault token revoke -self >/dev/null 2>&1 || true
+  exit 1
+fi
+
+# Activation record: the local copy lets handoff-sync reference the same activation.
+activation=$(AEGISX9_IDENTITY="$identity" python3 - "$who" "$hours" "$state_dir" <<'PY'
+import hashlib, json, os, socket, sys, uuid
+from datetime import UTC, datetime, timedelta
+
+try:
+    ident = json.loads(os.environ["AEGISX9_IDENTITY"])
+    who, hours, state_dir = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+    now = datetime.now(UTC).replace(microsecond=0)
+    record = {
+        "event": "breakglass_activation",
+        "activation_id": str(uuid.uuid4()),
+        "who": who,
+        "entity_id": ident["entity_id"],
+        "started_at": now.isoformat(),
+        "window_hours": hours,
+        "expires_at": (now + timedelta(hours=hours)).isoformat(),
+        "token_accessor": ident["accessor"],
+        "token_expire_time": ident["expire_time"],
+        "device": hashlib.sha256(socket.gethostname().encode()).hexdigest()[:12],
+    }
+    path = os.path.join(state_dir, "activation.json")
+    with open(path, "w", encoding="utf-8", opener=lambda p, f: os.open(p, f, 0o600)) as fh:
+        json.dump(record, fh, indent=2)
+    print(json.dumps(record))
+except Exception as exc:
+    print("breakglass-login: cannot write the activation record (" + type(exc).__name__ + ")", file=sys.stderr)
+    sys.exit(1)
+PY
+)
+
+# Deliver (or spool) the signed event. The HMAC key is read from the 0600 file by the
+# helper; it is never an argument.
+if ! printf '%s' "$activation" | "$bin_dir/aegisx9-event" --spool "$state_dir/outbox"; then
+  echo "breakglass-login: activation event not recorded; revoking the token" >&2
+  vault token revoke -self >/dev/null 2>&1 || true
+  exit 1
+fi
+
+expires=$(printf '%s' "$activation" | python3 -c 'import json,sys; print(json.load(sys.stdin)["expires_at"])')
+echo "breakglass-login: window open for $who until $expires ($hours h)." >&2
+echo "breakglass-login: run handoff-sync before it ends; it syncs, wipes and revokes." >&2
