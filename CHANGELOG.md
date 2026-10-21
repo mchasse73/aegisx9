@@ -9,7 +9,8 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 - First CI run: Checkov runs one framework per step, the rollout-wait script selects the
   namespace literal by comparison (no tainted argv for SAST), and GitHub provenance
-  attestation is skipped while the repository is private (refs #2).
+  attestation is skipped while the repository is private; the gitleaks job can read PR
+  commits (refs #2).
 
 ### Added
 - `.gitignore` refuses credential-shaped files in the working tree (refs #33).
