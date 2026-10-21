@@ -108,6 +108,7 @@ RUN mkdir -p /etc/claude-code/managed-settings.d /etc/aegisx9 \
       --env-output /etc/aegisx9/workspace.env \
  && install -m 0644 /opt/aegisx9/share/managed-mcp.json /etc/claude-code/managed-mcp.json \
  && chown -R root:root /etc/claude-code /etc/aegisx9 /opt/aegisx9 \
+ && find /opt/aegisx9 /etc/claude-code /etc/aegisx9 -type d -exec chmod 0755 {} + \
  && chmod 0755 /etc/claude-code /etc/claude-code/managed-settings.d /etc/aegisx9 \
  && chmod 0644 /etc/claude-code/managed-settings.json /etc/aegisx9/workspace.env
 
@@ -116,8 +117,11 @@ WORKDIR /home/dev
 ENV HOME=/home/dev
 # Home layout for the bare image (a mounted home volume hides it; workspace-init, sourced
 # by /etc/profile.d at login or called by the platform's startup script, recreates it).
-RUN . /opt/aegisx9/bin/workspace-init \
- && test -L /home/dev/.claude/skills/handoff
+# Directories that COPY --chmod=0644 creates implicitly have no execute bit, which makes
+# every path test under /opt/aegisx9 fail silently for a non-root user; the find/chmod
+# above fixes that, and this check prints the tree if it ever regresses.
+RUN { . /opt/aegisx9/bin/workspace-init && test -L /home/dev/.claude/skills/handoff; } \
+ || { ls -laR /opt/aegisx9/claude /home/dev/.claude >&2; exit 1; }
 # ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN are deliberately never set: apiKeyHelper is
 # the only credential source. workspace-init also unsets them at every login.
 HEALTHCHECK --interval=60s --timeout=15s --start-period=20s --retries=3 \
