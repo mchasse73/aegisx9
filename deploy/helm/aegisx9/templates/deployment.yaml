@@ -45,8 +45,12 @@ spec:
             - name: HOME
               value: /tmp
             {{- if .Values.gateway.oidc.enabled }}
+            {{- /* When jwksUrl is empty the URL comes from the existing Secret (envFrom below),
+                   so identity-provider details never need to be committed. */}}
+            {{- if .Values.gateway.oidc.jwksUrl }}
             - name: JWT_PUBLIC_KEY_URL
               value: {{ .Values.gateway.oidc.jwksUrl | quote }}
+            {{- end }}
             - name: JWT_AUDIENCE
               value: {{ .Values.gateway.oidc.audience | quote }}
             {{- end }}

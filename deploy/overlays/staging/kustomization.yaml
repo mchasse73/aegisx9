@@ -5,6 +5,8 @@ kind: Kustomization
 namespace: aegisx9-staging
 # The namespace, its quota and NetworkPolicies are owned by the platform team and are
 # excluded from this Application; the overlay only renders the chart into it.
+resources:
+  - externalsecret.yaml
 helmGlobals:
   chartHome: ../../helm
 helmCharts:
