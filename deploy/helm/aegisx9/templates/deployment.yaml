@@ -32,6 +32,25 @@ spec:
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
+      {{- if or .Values.scheduling.avoidControlPlane .Values.scheduling.excludeNodeHostnames }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  {{- if .Values.scheduling.avoidControlPlane }}
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+                  {{- end }}
+                  {{- if .Values.scheduling.excludeNodeHostnames }}
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      {{- range .Values.scheduling.excludeNodeHostnames }}
+                      - {{ . | quote }}
+                      {{- end }}
+                  {{- end }}
+      {{- end }}
       containers:
         - name: gateway
           image: {{ include "aegisx9.image" . | quote }}

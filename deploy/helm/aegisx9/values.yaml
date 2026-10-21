@@ -56,6 +56,13 @@ resources:
     cpu: "1"
     memory: 1Gi
 
+scheduling:
+  # Never schedule the gateway on control-plane nodes. Operators may also list node
+  # hostnames the gateway must avoid (left empty in this repository; the platform team
+  # protects shared workers with taints or its own admission defaults).
+  avoidControlPlane: true
+  excludeNodeHostnames: []
+
 networkPolicy:
   enabled: true
   # Namespace allowed to reach the gateway (the ingress controller).
