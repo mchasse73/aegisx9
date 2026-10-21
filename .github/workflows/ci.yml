@@ -56,6 +56,9 @@ jobs:
     name: gitleaks
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read # the action lists the PR's commits on pull_request events
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -127,10 +130,16 @@ jobs:
           directory: rendered
           framework: kubernetes
           config_file: .checkov.yaml
+      # One step per framework: the action's `framework` input takes a single value.
       - uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
         with:
           directory: .
-          framework: dockerfile,github_actions
+          framework: dockerfile
+          config_file: .checkov.yaml
+      - uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
+        with:
+          directory: .
+          framework: github_actions
           config_file: .checkov.yaml
       - uses: stackrox/kube-linter-action@87802a2f4e01abebb3ee3c67a3002fea71f6eae5 # v1.0.7
         with:
