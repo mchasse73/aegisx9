@@ -114,6 +114,10 @@ RUN mkdir -p /etc/claude-code/managed-settings.d /etc/aegisx9 \
 USER dev
 WORKDIR /home/dev
 ENV HOME=/home/dev
+# Home layout for the bare image (a mounted home volume hides it; workspace-init, sourced
+# by /etc/profile.d at login or called by the platform's startup script, recreates it).
+RUN . /opt/aegisx9/bin/workspace-init \
+ && test -L /home/dev/.claude/skills/handoff
 # ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN are deliberately never set: apiKeyHelper is
 # the only credential source. workspace-init also unsets them at every login.
 HEALTHCHECK --interval=60s --timeout=15s --start-period=20s --retries=3 \
