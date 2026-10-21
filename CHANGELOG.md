@@ -12,7 +12,7 @@ All notable changes to this project are documented here. The format follows
   the Argo CD AppProject file mirrors the live, namespace-whitelisted project (refs #8).
 - Branch protection no longer requires an approving review (single maintainer); required
   checks, linear history, conversation resolution and admin enforcement remain (refs #1).
-- Staging overlay pinned to the first signed release digest; overlays no longer carry the
+- Staging overlay pinned to the first release digest signed in the legacy cosign layout; overlays no longer carry the
   Namespace object, which the platform team owns (refs #8).
 
 ### Fixed
