@@ -43,7 +43,6 @@ done
 if [ "$quick" -eq 0 ]; then
   check claude --version
   check vault version
-  check gitleaks version
   check python3 --version
   check rsync --version
   check pgrep --version

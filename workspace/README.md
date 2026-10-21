@@ -12,7 +12,7 @@ gateway; **no static API key exists anywhere**.
 | `/etc/claude-code/managed-settings.json` (root, 0644) | `image/managed-settings.json` + `image/workspace.env` | The locked baseline (rendered at build time) |
 | `/etc/claude-code/managed-mcp.json` (root, 0644) | `image/managed-mcp.json` | Exclusive MCP server list (empty: MCP disabled) |
 | `/etc/aegisx9/workspace.env` (root, 0644) | rendered | The resolved site values, for tooling; no secrets |
-| `/opt/aegisx9/hooks/*` (root, 0755) | `image/hooks/` | Fail-closed hooks: prompt secret check, Bash guard, session-end handoff |
+| `/opt/aegisx9/hooks/*` (root, 0755) | `image/hooks/` | Fail-closed hooks: regex-only prompt credential check, Bash guard, session-end handoff |
 | `/opt/aegisx9/bin/gateway-token` (root, 0755) | `image/bin/gateway_token.py` | The `apiKeyHelper`: Vault-issued, short-lived gateway token |
 | `/opt/aegisx9/bin/handoff` (root, 0755) | `image/bin/handoff.py` | Daily handoff note CLI |
 | `/opt/aegisx9/bin/workspace-init` | `image/bin/workspace-init.sh` | Per-login init (unsets static keys, links the skill) |
@@ -28,13 +28,20 @@ gateway; **no static API key exists anywhere**.
 | Model policy | `availableModels`, `deniedModels`, `enforceAvailableModels: true` |
 | Permissions | `defaultMode: default`, bypass and auto modes disabled, reads outside the working directory blocked, secret paths denied, `WebFetch`/`WebSearch`/`curl`/`wget`/`sudo` denied; only managed rules, hooks and MCP servers count |
 | Sandbox | enabled, `allowUnsandboxedCommands: false`, `failIfUnavailable: true`, network allowlist = gateway + OTLP + Vault + `AEGISX9_SANDBOX_DOMAINS`, credential paths unreadable |
-| Hooks | `UserPromptSubmit`, `PreToolUse(Bash)`, `SessionEnd`; every hook has `onFailure: block` and exits 2 with a one-line reason; nothing sensitive is ever echoed |
+| Hooks | `UserPromptSubmit` (regex-only credential check, `image/hooks/credential-patterns.txt`), `PreToolUse(Bash)`, `SessionEnd`; every hook has `onFailure: block` and exits 2 with a one-line reason; nothing sensitive is ever echoed |
 | Telemetry | OTLP metrics and logs to `AEGISX9_OTLP_ENDPOINT`; `OTEL_LOG_USER_PROMPTS` is left unset so prompt text is never exported |
 | Hygiene | `cleanupPeriodDays: 7`, connectors and remote control off, stable update channel, nonessential traffic and feedback disabled |
 | Agent rules | `claudeMd`: never print secrets, no secrets on argv, exception type names only, no credential-shaped literals, write the handoff note |
 
 Unverified setting and variable names (`DISABLE_AUTOUPDATER`, `CLAUDE_CODE_MCP_ALLOWLIST_ENV`)
 are deliberately **not** in the enforced file; add them once confirmed against the docs.
+
+**Secret detection, where it is authoritative.** The prompt hook is a fast local regex
+check only (a developer convenience that fails closed on script errors). The
+**AegisX9 gateway's input guard** is the authoritative secret and PII detection: every
+request passes through it regardless of what runs in the workspace. The image carries
+no gitleaks binary (upstream releases are built with an old Go toolchain and fail the
+image CVE gate); the repository's own CI still runs gitleaks on the code.
 
 ## How site values get in (and why at build time)
 
@@ -115,8 +122,8 @@ sequenceDiagram
 - The `/handoff` skill (`claude/skills/handoff/SKILL.md`) is linked into
   `~/.claude/skills/` at login by `workspace-init`.
 - Memory stores on the home volume should be scanned by the same detectors as code; a
-  nightly `gitleaks dir ~/.claude ~/.aegisx9` job in the workspace template is the
-  intended mechanism (not in this repo).
+  nightly scan job in the workspace template (its own scanner image, not this one) over
+  `~/.claude` and `~/.aegisx9` is the intended mechanism (not in this repo).
 
 ## Runtime requirements for the workspace template
 

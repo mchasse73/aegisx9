@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import secrets
-import shutil
 import stat
 from pathlib import Path
 
@@ -13,29 +12,15 @@ from ws_helpers import HOOKS_DIR, RunHook
 
 import samples
 
-HAS_GITLEAKS = shutil.which("gitleaks") is not None
-needs_gitleaks = pytest.mark.skipif(not HAS_GITLEAKS, reason="gitleaks not on PATH")
 
-
-def _fake_gitleaks(tmp_path: Path, exit_code: int) -> dict[str, str]:
-    """A PATH prefix whose `gitleaks` exits with a fixed code (0 clean, 2 leak, 7 crash)."""
+def _broken_grep(tmp_path: Path) -> dict[str, str]:
+    """A PATH prefix whose `grep` crashes, to exercise the fail-closed path."""
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir(exist_ok=True)
-    script = bin_dir / "gitleaks"
-    script.write_text(f"#!/usr/bin/env bash\nexit {exit_code}\n")
+    script = bin_dir / "grep"
+    script.write_text("#!/usr/bin/env bash\nexit 7\n")
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     return {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
-
-
-def _no_gitleaks(tmp_path: Path) -> dict[str, str]:
-    """A PATH with only the essentials, so `gitleaks` is missing."""
-    bin_dir = tmp_path / "minbin"
-    bin_dir.mkdir(exist_ok=True)
-    for tool in ("bash", "python3", "grep", "mktemp", "rm", "dirname", "cat", "date"):
-        src = shutil.which(tool)
-        assert src is not None
-        (bin_dir / tool).symlink_to(src)
-    return {"PATH": str(bin_dir)}
 
 
 # --- prompt-credential-check -------------------------------------------------------------
@@ -58,8 +43,7 @@ def test_prompt_with_secret_is_blocked_without_echo(
     run_hook: RunHook, tmp_path: Path, secret: str
 ) -> None:
     prompt = f"please deploy this for me: {secret} thanks"
-    # The regex layer must catch each shape on its own: gitleaks is faked as "clean".
-    result = run_hook("prompt-credential-check.sh", {"prompt": prompt}, _fake_gitleaks(tmp_path, 0))
+    result = run_hook("prompt-credential-check.sh", {"prompt": prompt})
     assert result.returncode == 2
     assert result.stderr.startswith("prompt-credential-check: ")
     assert result.stderr.count("\n") == 1
@@ -67,34 +51,16 @@ def test_prompt_with_secret_is_blocked_without_echo(
         assert fragment not in result.stderr and fragment not in result.stdout
 
 
-@needs_gitleaks
 def test_clean_prompt_is_allowed(run_hook: RunHook) -> None:
     result = run_hook("prompt-credential-check.sh", {"prompt": "refactor the parser and add tests"})
     assert result.returncode == 0, result.stderr
     assert result.stdout == "" and result.stderr == ""
 
 
-@needs_gitleaks
-def test_gitleaks_layer_catches_what_the_regexes_do_not(run_hook: RunHook) -> None:
-    # A Slack webhook style URL is not in the fast pattern list but is in gitleaks' rules.
-    hook = "https://hooks.slack.com/services/T" + secrets.token_hex(4).upper()
-    hook += (
-        "/B" + secrets.token_hex(4).upper() + "/" + secrets.token_hex(12)
-    )  # [0-9a-f] only: matches the rule shape
-    result = run_hook("prompt-credential-check.sh", {"prompt": f"post to {hook}"})
-    assert result.returncode == 2
-    assert "gitleaks" in result.stderr
-    assert hook not in result.stderr
-
-
 def test_prompt_check_fails_closed(run_hook: RunHook, tmp_path: Path) -> None:
     payload = {"prompt": "hello"}
-    crashed = run_hook("prompt-credential-check.sh", payload, _fake_gitleaks(tmp_path, 7))
+    crashed = run_hook("prompt-credential-check.sh", payload, _broken_grep(tmp_path))
     assert crashed.returncode == 2 and "fail closed" in crashed.stderr
-    missing = run_hook("prompt-credential-check.sh", payload, _no_gitleaks(tmp_path))
-    assert missing.returncode == 2 and "unavailable" in missing.stderr
-    leak = run_hook("prompt-credential-check.sh", payload, _fake_gitleaks(tmp_path, 2))
-    assert leak.returncode == 2 and "gitleaks" in leak.stderr
     no_patterns = run_hook(
         "prompt-credential-check.sh",
         payload,
@@ -103,15 +69,13 @@ def test_prompt_check_fails_closed(run_hook: RunHook, tmp_path: Path) -> None:
     assert no_patterns.returncode == 2 and "pattern file" in no_patterns.stderr
 
 
-def test_prompt_check_rejects_malformed_input(run_hook: RunHook, tmp_path: Path) -> None:
-    result = run_hook(
-        "prompt-credential-check.sh",
-        {"prompt": ["not", "a", "string"]},
-        _fake_gitleaks(tmp_path, 0),
-    )
+def test_prompt_check_rejects_malformed_input(run_hook: RunHook) -> None:
+    result = run_hook("prompt-credential-check.sh", {"prompt": ["not", "a", "string"]})
     assert result.returncode == 0  # non-string prompts are serialised and scanned
-    broken = run_hook("prompt-credential-check.sh", {}, _fake_gitleaks(tmp_path, 0))
+    broken = run_hook("prompt-credential-check.sh", {})
     assert broken.returncode == 0
+    not_json = run_hook("prompt-credential-check.sh", "not json")
+    assert not_json.returncode == 2 and "fail closed" in not_json.stderr
 
 
 # --- pretooluse-guard ----------------------------------------------------------------

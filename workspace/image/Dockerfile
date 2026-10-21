@@ -13,11 +13,12 @@
 # Base image bump: `docker buildx imagetools inspect ubuntu:24.04` prints the manifest
 # list digest; put it after `@` below (Dependabot proposes it too). Tool versions are
 # build args; every download is verified against the publisher's checksum file.
+# No gitleaks binary: upstream builds ship with an old Go toolchain and fail the Trivy
+# gate; the prompt hook is regex-only and the gateway's input guard is authoritative.
 
 FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac AS tools
 ARG NODE_VERSION=24.22.1
 ARG VAULT_VERSION=2.2.0
-ARG GITLEAKS_VERSION=8.30.1
 # hadolint ignore=DL3008
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -39,12 +40,6 @@ RUN set -eu; \
     curl -fsSL "${base}/vault_${VAULT_VERSION}_SHA256SUMS" | grep " ${zip}\$" | sha256sum -c -; \
     mkdir -p /opt/tools/bin; \
     unzip -q "${zip}" vault -d /opt/tools/bin
-RUN set -eu; \
-    tgz="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"; \
-    base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"; \
-    curl -fsSLO "${base}/${tgz}"; \
-    curl -fsSL "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" | grep " ${tgz}\$" | sha256sum -c -; \
-    tar -xzf "${tgz}" -C /opt/tools/bin gitleaks
 
 FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 ARG VERSION=0.0.0
@@ -84,7 +79,7 @@ RUN apt-get update \
  && rm -f /etc/ssh/ssh_host_*
 
 COPY --from=tools /opt/node /opt/node
-COPY --from=tools --chmod=0755 /opt/tools/bin/vault /opt/tools/bin/gitleaks /usr/local/bin/
+COPY --from=tools --chmod=0755 /opt/tools/bin/vault /usr/local/bin/
 ENV PATH=/opt/node/bin:/opt/aegisx9/bin:/usr/local/bin:/usr/bin:/bin \
     LANG=en_US.UTF-8 \
     NPM_CONFIG_UPDATE_NOTIFIER=false \

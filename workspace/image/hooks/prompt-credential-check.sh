@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AegisX9 workspace hook: UserPromptSubmit.
 # Blocks a prompt that carries credential-shaped text before it leaves the workspace.
+# This is a fast, regex-only local check (credential-patterns.txt); the authoritative
+# secret detection is the AegisX9 gateway's input guard, which every request passes.
 #
 # Input : the Claude Code hook JSON on stdin ({"prompt": "...", ...}).
 # Output: exit 0 to allow; exit 2 with a one-line reason on stderr to block.
@@ -39,17 +41,12 @@ PY
 )
 python3 -c "$extract" "$prompt_file"
 
-# 1. Fast local check: common token shapes.
-if grep -E -q -f "$patterns" "$prompt_file"; then
-  block "credential-shaped text in the prompt; remove the secret and rephrase"
-fi
-
-# 2. gitleaks' full rule set on the same text. A missing or failing scanner blocks too.
-command -v gitleaks >/dev/null 2>&1 || block "secret scanner unavailable; prompt blocked (fail closed)"
+# Common token shapes. grep exits 1 on no match (allowed) and >1 on an error, which the
+# ERR trap turns into a block.
 rc=0
-gitleaks dir "$tmp" --no-banner --redact --exit-code 2 >/dev/null 2>&1 || rc=$?
+grep -E -q -f "$patterns" "$prompt_file" || rc=$?
 case "$rc" in
-  0) exit 0 ;;
-  2) block "gitleaks found a secret in the prompt; remove it and rephrase" ;;
-  *) block "secret scanner failed; prompt blocked (fail closed)" ;;
+  0) block "credential-shaped text in the prompt; remove the secret and rephrase" ;;
+  1) exit 0 ;;
+  *) block "internal error; prompt blocked (fail closed)" ;;
 esac
