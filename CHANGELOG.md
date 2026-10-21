@@ -22,6 +22,10 @@ All notable changes to this project are documented here. The format follows
   commits (refs #2).
 
 ### Added
+- Developer tier: Coder workspace template as Terraform (`infra/workspaces/coder-template`):
+  one restricted pod per developer running the signed workspace image by digest, persistent
+  home, CPU/memory/team parameters, gateway and OTel environment, no provider key; the
+  `signed-digest-images` Sentinel policy now also checks bare pods (refs #47).
 - `.gitignore` refuses credential-shaped files in the working tree (refs #33).
 - Project onboarded into the maintainer environment: repo remote, tracking issue, docs
   collection and memory (refs #33).

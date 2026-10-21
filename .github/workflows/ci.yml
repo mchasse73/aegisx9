@@ -188,7 +188,7 @@ jobs:
         run: terraform fmt -check -recursive infra
       - name: terraform validate (no backend; TFE is never contacted from GitHub)
         run: |
-          for root in infra/staging infra/prod; do
+          for root in infra/staging infra/prod infra/workspaces/coder-template; do
             terraform -chdir="${root}" init -backend=false -input=false
             terraform -chdir="${root}" validate
           done

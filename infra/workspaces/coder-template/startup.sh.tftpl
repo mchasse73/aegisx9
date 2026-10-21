@@ -1,0 +1,47 @@
+#!/bin/sh
+# AegisX9 workspace startup. Runs as uid 1000 inside the workspace pod on every start.
+# It reads no secret and writes none: the gateway authenticates the developer's identity.
+set -eu
+
+HOME="${home}"
+export HOME
+
+# 1. The home volume is empty on first start (and fsGroup only fixes the mount point).
+chmod 700 "$HOME" 2>/dev/null || true
+mkdir -p "$HOME/.ssh" "$HOME/.claude/projects" "$HOME/.aegisx9/handoff" "$HOME/.aegisx9/memory"
+chmod 700 "$HOME/.ssh" "$HOME/.aegisx9"
+
+# 2. Unprivileged sshd for VS Code Remote-SSH and JetBrains Gateway. Host keys live in
+#    the home volume so the fingerprint survives restarts. `coder ssh` works without it.
+if command -v sshd >/dev/null 2>&1; then
+  mkdir -p "$HOME/.ssh/host_keys"
+  for t in ed25519; do
+    [ -f "$HOME/.ssh/host_keys/ssh_host_$${t}_key" ] || \
+      ssh-keygen -q -t "$t" -N "" -f "$HOME/.ssh/host_keys/ssh_host_$${t}_key"
+  done
+  cat > "$HOME/.ssh/sshd_config" <<CONF
+Port ${ssh_port}
+ListenAddress 127.0.0.1
+HostKey $HOME/.ssh/host_keys/ssh_host_ed25519_key
+PidFile none
+UsePAM no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AuthorizedKeysFile $HOME/.ssh/authorized_keys
+PermitRootLogin no
+AllowUsers dev
+X11Forwarding no
+AllowAgentForwarding yes
+AllowTcpForwarding yes
+LogLevel INFO
+CONF
+  if ! pgrep -x sshd >/dev/null 2>&1; then
+    "$(command -v sshd)" -f "$HOME/.ssh/sshd_config" -E "$HOME/.ssh/sshd.log" \
+      || echo "sshd did not start; coder ssh still works" >&2
+  fi
+else
+  echo "sshd is not in the image; use coder ssh" >&2
+fi
+
+echo "AegisX9 workspace ready (gateway: $${ANTHROPIC_BASE_URL:-unset})"
