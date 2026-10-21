@@ -1,5 +1,6 @@
 module "env" {
-  source = "../modules/aegisx9-env"
+  environment_reviewers_enabled = var.environment_reviewers_enabled
+  source                        = "../modules/aegisx9-env"
 
   environment = "staging"
   quota = {
