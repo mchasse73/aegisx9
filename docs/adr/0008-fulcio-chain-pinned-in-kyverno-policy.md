@@ -17,7 +17,7 @@ settings, a custom root file, and ignoring the transparency log or the SCT do no
 ## Decision
 
 - The keyless attestor in `policies/kyverno/verify-images.yaml` carries `roots` with the
-  public Fulcio chain (intermediate plus roots). Rekor and certificate-transparency keys
+  public Fulcio chain (current intermediate plus its root). Rekor and certificate-transparency keys
   continue to come from TUF; transparency-log and SCT verification stay enforced.
 - The release pipeline keeps signing with current cosign in the legacy layout
   (`--new-bundle-format=false --use-signing-config=false`) so the cluster's verifier finds
