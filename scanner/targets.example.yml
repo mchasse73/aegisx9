@@ -1,0 +1,43 @@
+# What the external vantage looks at, on top of every host and address in the approved
+# registry (settings.include_registry). Placeholders only; the real file is deployed by
+# the automation role from the platform operations repository.
+
+# Hostnames resolved at scan time.
+hosts:
+  - www.example.com
+  - gateway.example.com
+
+# Address blocks: both WAN ranges and every cloud address. TCP top 1000 and UDP top 100.
+cidrs:
+  - 203.0.113.0/27
+  - 198.51.100.16/28
+
+# Named records with the exact answers expected. Anything else is DNS_DRIFT.
+dns:
+  - name: www.example.com
+    type: A
+    expect: [203.0.113.10]
+  - name: gateway.example.com
+    type: A
+    expect: [203.0.113.11]
+  - name: example.com
+    type: MX
+    expect: ["10 mail.example.com"]
+
+# HTTP reachability, checked every five minutes by the uptime timer.
+uptime:
+  - url: https://www.example.com/
+    expect_status: 200
+    max_latency_ms: 2000
+  - url: https://gateway.example.com/health
+    expect_status: 200
+    max_latency_ms: 3000
+
+settings:
+  alert_min_severity: medium  # info|low|medium|high|critical: lower findings are reported, not alerted
+  cert_warn_days: 14
+  nmap_tcp_top_ports: 1000
+  nmap_udp_top_ports: 100
+  http_timeout_s: 10
+  nuclei_enabled: true
+  include_registry: true

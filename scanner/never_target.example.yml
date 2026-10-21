@@ -1,0 +1,18 @@
+# NEVER-TARGET LIST. Loaded before anything else; a target that matches is refused,
+# logged and reported as REFUSED_TARGET. It is never resolved, scanned, probed or
+# red-teamed, whichever file or registry section named it. Hostnames that resolve into
+# a listed CIDR are refused too.
+#
+# Hard rule: live-trading endpoints are never scanned. Keep them here.
+reason: live-trading and third-party endpoints must never receive scanner traffic
+
+hostnames:
+  - trading.example.com
+  - broker-api.example.com
+
+cidrs:
+  - 192.0.2.0/24
+
+patterns:
+  - "*.trading.example.com"
+  - "*broker*"

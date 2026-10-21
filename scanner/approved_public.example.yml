@@ -1,0 +1,97 @@
+# =============================================================================
+# APPROVED PUBLIC EXPOSURE REGISTRY (example)
+# =============================================================================
+# The real registry lives in the platform operations repository and is deployed to
+# /etc/aegisx9-scanner/approved_public.yml by the automation role. This file shows the
+# format only; every value is a placeholder.
+#
+# Every entry needs explicit authorization:
+#   authorized_by:   <who approved it>
+#   authorized_date: YYYY-MM-DD
+#   reason:          <business reason>
+#   expiry:          never | YYYY-MM-DD   (an expired entry is no longer approved)
+# Optional: ports (default [80, 443]), proto (tcp|udp, default tcp).
+#
+# "Public" means reachable from the internet with no gate. Anything observed on the
+# internet that is not covered by an active entry is an alert.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# TIER 1 - FULLY PUBLIC (no network gate, no auth gate). Keep this to a minimum.
+# -----------------------------------------------------------------------------
+public:
+  - domain: www.example.com
+    ip: 203.0.113.10
+    service: marketing-site
+    purpose: Public marketing and documentation site
+    authorized_by: <security-owner>
+    authorized_date: "2026-01-15"
+    reason: The product site must be public.
+    expiry: never
+
+  - domain: gateway.example.com
+    ip: 203.0.113.11
+    service: aegisx9-gateway
+    purpose: Public AI gateway endpoint for the public chat
+    authorized_by: <security-owner>
+    authorized_date: "2026-01-15"
+    reason: First consumer of the gateway is a public chat; OIDC in front of every call.
+    expiry: "2027-01-15"
+
+  - domain: mail.example.com
+    ip: 203.0.113.12
+    service: mail
+    purpose: Inbound and submission mail
+    authorized_by: <security-owner>
+    authorized_date: "2026-01-15"
+    reason: SMTP must accept mail from any MTA; submission and IMAP are authenticated.
+    expiry: never
+    ports: [25, 80, 443, 465, 587, 993]
+
+# -----------------------------------------------------------------------------
+# TIER 2 - GATED (public DNS, but a network or SSO gate in front). Any other
+# section name with the same entry shape is treated as a gated tier.
+# -----------------------------------------------------------------------------
+sso_gated:
+  - domain: console.example.com
+    ip: 203.0.113.10
+    service: operator-console
+    middleware: [security-headers]
+    auth_gate: oauth2-proxy (OIDC, operators group, MFA)
+    purpose: Operator console; sign-in from anywhere, every route behind SSO
+    authorized_by: <security-owner>
+    authorized_date: "2026-02-01"
+    reason: Remote operations need it; SSO is the gate.
+    expiry: never
+
+parked_redirects:
+  - domains:
+      - example.net
+      - example.org
+    service: redirect-only
+    purpose: Owned domains that redirect to the main site, no content served
+    authorized_by: <security-owner>
+    authorized_date: "2026-02-01"
+    reason: Pure redirect routes.
+    expiry: never
+
+# -----------------------------------------------------------------------------
+# PROHIBITED - explicit deny list. Any public answer for these is an immediate
+# CRITICAL alert. Globs are accepted.
+# -----------------------------------------------------------------------------
+prohibited:
+  - "vault.example.com"
+  - "*.internal.example.com"
+
+# -----------------------------------------------------------------------------
+# APPROVED CLOUD SECURITY-GROUP EXCEPTIONS: 0.0.0.0/0 ingress approved for one
+# group and the listed ports only.
+# -----------------------------------------------------------------------------
+approved_aws_sg_exceptions:
+  - sg_id: sg-0123456789abcdef0
+    sg_name: example-mail-sg
+    ports: [25, 80, 443, 465, 587, 993]
+    authorized_by: <security-owner>
+    authorized_date: "2026-01-15"
+    reason: Mail ports are unauthenticated by protocol or authenticated per user.
+    expiry: never
