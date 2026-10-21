@@ -1,0 +1,139 @@
+---
+- name: Validate role inputs
+  ansible.builtin.assert:
+    that:
+      - scanner_package_ref is match('^v[0-9]+\.[0-9]+\.[0-9]+$')
+      - scanner_approved_registry_path | length > 0
+      - scanner_targets is mapping
+      - scanner_never_target is mapping
+    fail_msg: >-
+      scanner_package_ref must be a vX.Y.Z tag, scanner_approved_registry_path must point at
+      the approved-exposure registry from the platform operations checkout, and
+      scanner_targets / scanner_never_target must be mappings
+    quiet: true
+
+- name: Install host packages the scanner shells out to
+  ansible.builtin.apt:
+    name:
+      - nmap
+      - python3-venv
+      - dnsutils
+      - git
+      - nodejs
+      - npm
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install the service account and directory definitions
+  ansible.builtin.copy:
+    src: "{{ scanner_units_dir }}/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - { src: aegisx9-scanner.sysusers.conf, dest: /usr/lib/sysusers.d/aegisx9-scanner.conf }
+    - { src: aegisx9-scanner.tmpfiles.conf, dest: /usr/lib/tmpfiles.d/aegisx9-scanner.conf }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: Create scanner user and directories
+
+- name: Flush handlers so the user and directories exist before the package install
+  ansible.builtin.meta: flush_handlers
+
+- name: Install or update the scanner package at the pinned tag (plus garak for the red-team unit)
+  ansible.builtin.pip:
+    name:
+      - "git+https://github.com/mchasse73/aegisx9@{{ scanner_package_ref }}#egg=aegisx9[scanner]"
+      - "garak=={{ scanner_garak_version }}"
+    virtualenv: "{{ scanner_venv }}"
+    virtualenv_command: python3 -m venv
+    state: forcereinstall
+
+- name: Install the red-team suites (promptfoo and garak configs) from the project checkout
+  ansible.builtin.copy:
+    src: "{{ scanner_redteam_src_dir }}/"
+    dest: "{{ scanner_redteam_dir }}/"
+    owner: root
+    group: root
+    mode: "u=rwX,go=rX"
+
+- name: Install the boot-time secrets fetcher (root only; reads SSM, writes 0600 files)
+  ansible.builtin.copy:
+    src: "{{ scanner_units_dir }}/aegisx9-scanner-env"
+    dest: /usr/local/sbin/aegisx9-scanner-env
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Install the systemd units and timers
+  ansible.builtin.copy:
+    src: "{{ scanner_units_dir }}/{{ item }}"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ scanner_units }}"
+  notify: Reload systemd
+
+- name: Ensure the configuration directory exists
+  ansible.builtin.file:
+    path: "{{ scanner_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy the approved-exposure registry (content from the platform operations repository)
+  ansible.builtin.copy:
+    src: "{{ scanner_approved_registry_path }}"
+    dest: "{{ scanner_config_dir }}/approved_public.yml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Deploy the scan target list
+  ansible.builtin.copy:
+    dest: "{{ scanner_config_dir }}/targets.yml"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by the x9.aegisx9.scanner role. Hostnames are resolved at scan time.
+      {{ scanner_targets | to_nice_yaml(indent=2) }}
+
+- name: Deploy the never-target deny list (checked before any scan)
+  ansible.builtin.copy:
+    dest: "{{ scanner_config_dir }}/never_target.yml"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by the x9.aegisx9.scanner role. A target matching this list is refused.
+      {{ scanner_never_target | to_nice_yaml(indent=2) }}
+
+- name: Validate the deployed configuration
+  ansible.builtin.command:
+    argv:
+      - "{{ scanner_venv }}/bin/aegisx9-scan"
+      - validate-config
+      - --config
+      - "{{ scanner_config_dir }}"
+  changed_when: false
+
+- name: Flush handlers so systemd sees the units before they are enabled
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable the boot-time secrets fetcher
+  ansible.builtin.systemd_service:
+    name: aegisx9-scanner-env.service
+    enabled: true
+    state: started
+
+- name: Enable the scan timers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: "{{ scanner_timers }}"

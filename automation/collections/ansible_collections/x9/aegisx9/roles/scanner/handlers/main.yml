@@ -1,0 +1,16 @@
+---
+- name: Create scanner user and directories
+  ansible.builtin.command:
+    argv: [/usr/bin/systemd-sysusers]
+  changed_when: true
+  listen: Create scanner user and directories
+
+- name: Apply the tmpfiles definitions
+  ansible.builtin.command:
+    argv: [/usr/bin/systemd-tmpfiles, --create]
+  changed_when: true
+  listen: Create scanner user and directories
+
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true

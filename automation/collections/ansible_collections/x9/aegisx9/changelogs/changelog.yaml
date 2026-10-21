@@ -10,4 +10,6 @@ releases:
     changes:
       major_changes:
         - Initial roles for provider-key rotation, gateway upgrade, audit evidence and incident response.
+      minor_changes:
+        - New scanner role (external vantage host over SSM Session Manager) and exposure_change role (incident record for scanner webhook events).
     release_date: "2026-10-21"

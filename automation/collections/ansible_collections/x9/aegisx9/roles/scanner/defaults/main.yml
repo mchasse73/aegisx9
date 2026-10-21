@@ -1,0 +1,54 @@
+---
+# The scanner host is reached over AWS Systems Manager Session Manager, never SSH:
+# see automation/inventory/scanner.yml (community.aws.aws_ssm connection).
+# Secrets never pass through this role: the host fetches them from the SSM Parameter
+# Store at boot (aegisx9-scanner-env.service). This role only ships code and config.
+
+# Git tag of this repository to install the scanner package from (pinned).
+scanner_package_ref: v0.1.0
+scanner_venv: /opt/aegisx9-scanner/venv
+scanner_config_dir: /etc/aegisx9-scanner
+scanner_state_dir: /var/lib/aegisx9-scanner
+# garak release installed next to the scanner for the weekly red-team unit.
+scanner_garak_version: 0.17.1
+# Red-team suites (promptfoo + garak configs) shipped from the project checkout.
+scanner_redteam_src_dir: "{{ playbook_dir }}/../../redteam"
+scanner_redteam_dir: /opt/aegisx9-scanner/redteam
+
+# Where the systemd units ship in the project checkout (AAP project = this repository).
+scanner_units_dir: "{{ playbook_dir }}/../../scanner/systemd"
+scanner_units:
+  - aegisx9-scanner-env.service
+  - aegisx9-scan-daily.service
+  - aegisx9-scan-daily.timer
+  - aegisx9-scan-uptime.service
+  - aegisx9-scan-uptime.timer
+  - aegisx9-scan-redteam.service
+  - aegisx9-scan-redteam.timer
+scanner_timers:
+  - aegisx9-scan-daily.timer
+  - aegisx9-scan-uptime.timer
+  - aegisx9-scan-redteam.timer
+
+# Path (on the controller) to the approved-exposure registry. The file is maintained in
+# the platform operations repository and is checked out next to this one by the AAP
+# project; it is never embedded in this collection.
+scanner_approved_registry_path: ""
+
+# Scan targets: hostnames and CIDRs (rendered to targets.yml). Placeholders only here.
+scanner_targets:
+  hosts:
+    - www.example.com
+  cidrs:
+    - 203.0.113.0/27
+  dns: []
+  uptime:
+    - https://www.example.com/
+
+# Never-target deny list (rendered to never_target.yml). Live-trading endpoints and
+# anything else that must never be scanned or loaded. Checked before every scan.
+scanner_never_target:
+  hostnames: []
+  cidrs: []
+  patterns:
+    - "*.trading.example.com"
