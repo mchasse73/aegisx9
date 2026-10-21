@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Release signs and attests in cosign's legacy layout so the cluster's keyless image
+  verifier finds the signature; overlays no longer render a NetworkPolicy (platform-owned);
+  the Argo CD AppProject file mirrors the live, namespace-whitelisted project (refs #8).
 - Branch protection no longer requires an approving review (single maintainer); required
   checks, linear history, conversation resolution and admin enforcement remain (refs #1).
 - Staging overlay pinned to the first signed release digest; overlays no longer carry the
