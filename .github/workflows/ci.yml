@@ -25,6 +25,7 @@ env:
   TFLINT_VERSION: "v0.64.0"
   SENTINEL_VERSION: "0.41.0"
   ANSIBLE_LINT_VERSION: "26.10.1"
+  GITLEAKS_VERSION: "8.30.1" # also pinned in workspace/image/Dockerfile
 
 jobs:
   lint-test:
@@ -40,6 +41,17 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
       - run: pip install -e '.[dev]'
+      - name: install gitleaks (checksum-verified; the workspace hook tests call it)
+        run: |
+          set -euo pipefail
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          tgz="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          cd "${RUNNER_TEMP}"
+          curl -fsSLO "${base}/${tgz}"
+          curl -fsSL "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" | grep " ${tgz}$" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/bin"
+          tar -xzf "${tgz}" -C "${RUNNER_TEMP}/bin" gitleaks
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
       - name: ruff
         run: ruff check --output-format=github . && ruff format --check .
       - name: mypy
@@ -213,6 +225,65 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
+
+  workspace-image:
+    name: workspace image build + Trivy + container self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [lint-test]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: workspace
+          file: workspace/image/Dockerfile
+          load: true
+          push: false
+          tags: aegisx9-workspace:ci-${{ github.sha }}
+          # CI renders the baseline with example hosts; the release build uses the
+          # repository variables (see workspace/README.md).
+          build-args: |
+            VERSION=${{ github.sha }}
+            AEGISX9_GATEWAY_URL=https://gateway.example.test
+            AEGISX9_OTLP_ENDPOINT=https://otlp.example.test
+            AEGISX9_VAULT_ADDR=https://vault.example.test
+          cache-from: type=gha,scope=workspace
+          cache-to: type=gha,mode=max,scope=workspace
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: aegisx9-workspace:ci-${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: container self-test (locked baseline, non-root, no static key)
+        env:
+          IMG: aegisx9-workspace:ci-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          run() { docker run --rm "${IMG}" "$@"; }
+          # The image's own self-test, then the same facts asserted from outside.
+          run /opt/aegisx9/bin/workspace-selftest
+          for f in /etc/claude-code/managed-settings.json /etc/claude-code/managed-mcp.json; do
+            [ "$(run stat -c '%U:%G %a' "${f}")" = "root:root 644" ]
+          done
+          [ "$(run id -u)" = "1000" ] && [ "$(run id -un)" = "dev" ]
+          run sh -c '! command -v sudo >/dev/null 2>&1 && ! test -e /etc/sudoers && ! id -nG | grep -qw sudo'
+          run sh -c 'touch /etc/claude-code/managed-settings.json 2>/dev/null && exit 1 || exit 0'
+          run claude --version
+          [ -z "$(run sh -c 'printf "%s%s" "${ANTHROPIC_API_KEY:-}" "${ANTHROPIC_AUTH_TOKEN:-}"')" ]
+          run python3 -c 'import json; s=json.load(open("/etc/claude-code/managed-settings.json")); assert s["apiKeyHelper"]=="/opt/aegisx9/bin/gateway-token"; assert s["env"]["ANTHROPIC_BASE_URL"]=="https://gateway.example.test"; assert s["sandbox"]["enabled"] is True'
+          # Hooks work inside the image (gitleaks present, fail-closed paths intact).
+          run sh -c 'printf "%s" "{\"prompt\":\"refactor the parser\"}" | /opt/aegisx9/hooks/prompt-credential-check.sh'
+          run sh -c 'printf "%s" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"printenv\"}}" | /opt/aegisx9/hooks/pretooluse-guard.sh; test $? -eq 2'
+          run bash -lc 'test -L "$HOME/.claude/skills/handoff" && test -d "$HOME/.aegisx9/handoff"'
+          run handoff --help >/dev/null
+          # Coder template requirements: sshd (unprivileged, started by the agent), rsync, pgrep.
+          run sh -c 'test -x /usr/sbin/sshd && rsync --version >/dev/null && pgrep --version >/dev/null'
+          run sh -c 'test ! -e /etc/ssh/ssh_host_ed25519_key' # host keys live on the home volume
+          echo "workspace image self-test passed"
 
   terraform:
     name: terraform fmt, validate, tflint, Checkov

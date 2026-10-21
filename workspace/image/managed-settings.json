@@ -1,0 +1,124 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable",
+    "disableAutoMode": "disable",
+    "blockReadsOutsideWorkingDirectories": true,
+    "allow": [],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(rm -rf *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(*.pem)",
+      "Read(*.key)",
+      "Read(//home/dev/.aws/**)",
+      "Read(//home/dev/.ssh/**)",
+      "Read(//home/dev/.aegisx9/vault-token)",
+      "Read(//home/dev/.aegisx9/gateway-token.json)",
+      "Read(//home/dev/.claude/.credentials.json)",
+      "Read(//home/dev/.netrc)",
+      "Read(//home/dev/.npmrc)",
+      "Read(//home/dev/.kube/**)",
+      "Read(//home/dev/.docker/config.json)",
+      "WebFetch",
+      "WebSearch",
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Bash(sudo *)",
+      "Bash(su *)"
+    ]
+  },
+  "allowManagedPermissionRulesOnly": true,
+  "allowManagedHooksOnly": true,
+  "allowManagedMcpServersOnly": true,
+  "allowedProviders": ["customEndpoint"],
+  "forceLoginMethod": "gateway",
+  "apiKeyHelper": "/opt/aegisx9/bin/gateway-token",
+  "availableModels": "${AEGISX9_MODELS_LIST}",
+  "deniedModels": "${AEGISX9_DENIED_MODELS_LIST}",
+  "enforceAvailableModels": true,
+  "sandbox": {
+    "enabled": true,
+    "allowUnsandboxedCommands": false,
+    "failIfUnavailable": true,
+    "network": {
+      "allowedDomains": "${AEGISX9_SANDBOX_DOMAINS_LIST}"
+    },
+    "filesystem": {
+      "denyRead": [
+        "~/.aws",
+        "~/.ssh",
+        "~/.aegisx9/vault-token",
+        "~/.aegisx9/gateway-token.json",
+        "~/.claude/.credentials.json",
+        "~/.netrc",
+        "~/.npmrc",
+        "~/.kube",
+        "~/.docker/config.json",
+        "/etc/shadow"
+      ]
+    }
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/aegisx9/hooks/prompt-credential-check.sh",
+            "timeout": 30,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/aegisx9/hooks/pretooluse-guard.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/aegisx9/hooks/session-end-handoff.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "ANTHROPIC_BASE_URL": "${AEGISX9_GATEWAY_URL}",
+    "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "${AEGISX9_API_KEY_HELPER_TTL_MS}",
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "${AEGISX9_OTLP_ENDPOINT}",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_RESOURCE_ATTRIBUTES": "service.name=claude-code,deployment.environment=${AEGISX9_ENVIRONMENT},aegisx9.workspace_image=${AEGISX9_IMAGE_VERSION}",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_FEEDBACK_COMMAND": "1",
+    "VAULT_ADDR": "${AEGISX9_VAULT_ADDR}"
+  },
+  "cleanupPeriodDays": 7,
+  "disableClaudeAiConnectors": true,
+  "remoteControlAtStartup": false,
+  "autoUpdatesChannel": "stable",
+  "skipWebFetchPreflight": true,
+  "claudeMd": "# AegisX9 workspace rules (managed; apply in every session)\n\n1. Never print a secret, token, key, password, licence or any substring of one, not even a prefix. Compare values by hash (sha256, first 12 characters). Inspect files that may hold secrets by key names and lengths only.\n2. Secrets travel via stdin, environment variables or 0600 files, never on a command line (argv). That applies to remote hosts and CI too.\n3. Error handling prints only the exception type name (type(e).__name__), never str(e), tracebacks or URLs.\n4. No credential-shaped literals anywhere: not in code, tests, fixtures, docs or commit messages. Generate test credentials at runtime (secrets.token_urlsafe) and use <placeholder> values in docs.\n5. All model traffic goes through the AegisX9 gateway. Never set a static provider API key or auth token in the environment; the gateway token comes from the managed apiKeyHelper only.\n6. Before ending a session, write the handoff note for today with the handoff skill (it runs /opt/aegisx9/bin/handoff): what changed, open items, first thing tomorrow.\n"
+}

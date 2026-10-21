@@ -56,10 +56,14 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "C4", "SIM", "RUF"]
 python_version = "3.12"
 strict = true
 mypy_path = "src:scripts/ci:scanner"
+# Standalone scripts (CI helpers, scanner, workspace image tools, break-glass tooling) are
+# type-checked here; the scanner and image tools are measured for coverage.
 files = [
   "src/aegisx9",
   "scripts/ci",
   "scanner/aegisx9_scanner",
+  "workspace/image/bin",
+  "workspace/image/render_settings.py",
   "workspace/breakglass/bin/handoff-sync",
   "workspace/breakglass/bin/aegisx9-event",
 ]
@@ -67,8 +71,8 @@ scripts_are_modules = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --cov=aegisx9 --cov=aegisx9_scanner --cov-report=term-missing --cov-fail-under=85"
+addopts = "-q --cov --cov-report=term-missing --cov-fail-under=85"
 
 [tool.coverage.run]
 branch = true
-source = ["aegisx9", "aegisx9_scanner"]
+source = ["aegisx9", "aegisx9_scanner", "workspace/image"]
