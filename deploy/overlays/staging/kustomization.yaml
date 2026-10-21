@@ -3,8 +3,8 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: aegisx9-staging
-resources:
-  - namespace.yaml
+# The namespace, its quota and NetworkPolicies are owned by the platform team and are
+# excluded from this Application; the overlay only renders the chart into it.
 helmGlobals:
   chartHome: ../../helm
 helmCharts:
@@ -14,5 +14,5 @@ helmCharts:
     valuesFile: values.yaml
 images:
   - name: ghcr.io/mchasse73/aegisx9
-    # Not yet released: replaced by the first signed digest from the release workflow.
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    # Signed digest from the release workflow for main 63a93a8 (2026-10-21).
+    digest: sha256:1351836702c63ee8b3827e753e1d988631d3f634dffe987b8250d325b391cf79

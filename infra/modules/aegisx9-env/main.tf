@@ -213,8 +213,13 @@ resource "github_repository_environment" "this" {
   environment         = var.environment == "prod" ? "production" : "staging"
   prevent_self_review = false
   can_admins_bypass   = false
-  reviewers {
-    users = [for u in data.github_user.reviewers : tonumber(u.id)]
+  # Required reviewers are a plan feature: GitHub rejects them on a private repository
+  # under the free plan (verified 2026-10-21). Enable once the repository is public.
+  dynamic "reviewers" {
+    for_each = var.environment_reviewers_enabled ? [1] : []
+    content {
+      users = [for u in data.github_user.reviewers : tonumber(u.id)]
+    }
   }
   deployment_branch_policy {
     protected_branches     = true
@@ -238,9 +243,13 @@ resource "github_branch_protection" "main" {
     contexts = var.required_status_checks
   }
 
+  # Single-maintainer repository: GitHub does not let an author approve their own pull
+  # request, so a required approval would block every merge. Required status checks,
+  # linear history, conversation resolution and admin enforcement remain. Raise the count
+  # and re-enable code-owner reviews when a second maintainer or a bot author exists (#7).
   required_pull_request_reviews {
-    required_approving_review_count = 1
-    require_code_owner_reviews      = true
+    required_approving_review_count = 0
+    require_code_owner_reviews      = false
     dismiss_stale_reviews           = true
   }
 }

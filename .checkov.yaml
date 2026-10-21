@@ -12,7 +12,8 @@ skip-check:
   # promote-prod.yml takes a digest input by design: it does not build anything, it
   # validates the digest format, verifies its signature, and opens a reviewed PR.
   - CKV_GHA_7
-  # Single-maintainer project: one CODEOWNERS approval is the maximum possible.
+  # Single-maintainer project: an author cannot approve their own PR, so required
+  # approvals would block every merge; required checks + admin enforcement apply instead.
   - CKV_GIT_5
   # Commit signing is tracked as a Phase 1 issue; enabling it before maintainers have
   # signing keys configured would block all merges.
