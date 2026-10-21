@@ -32,9 +32,8 @@ def main() -> int:
     patterns = load_patterns()
     for raw in sys.stdin:
         line = _ANSI.sub("", raw)
-        if args.terraform_summary:
-            if not _TF_KEEP.search(_BORDER.sub("", line)):
-                continue
+        if args.terraform_summary and not _TF_KEEP.search(_BORDER.sub("", line)):
+            continue
         sys.stdout.write(redact(line, patterns, values))
     return 0
 
