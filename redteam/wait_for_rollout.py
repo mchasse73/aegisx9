@@ -15,7 +15,6 @@ import sys
 import time
 
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-NAMESPACE_RE = re.compile(r"^aegisx9-(staging|prod)$")
 
 
 def rollout_complete(deploy: dict, digest: str) -> bool:  # type: ignore[type-arg]
@@ -38,7 +37,13 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=900)
     args = ap.parse_args()
 
-    if not NAMESPACE_RE.match(args.namespace):
+    # The namespace passed to kubectl is one of two literals, chosen by comparison, so no
+    # user-controlled string reaches the argv (and SAST taint tracking agrees).
+    if args.namespace == "aegisx9-staging":
+        namespace = "aegisx9-staging"
+    elif args.namespace == "aegisx9-prod":
+        namespace = "aegisx9-prod"
+    else:
         print("namespace must be aegisx9-staging or aegisx9-prod", file=sys.stderr)
         return 2
 
@@ -55,12 +60,12 @@ def main() -> int:
 
     deadline = time.monotonic() + args.timeout
     while time.monotonic() < deadline:
-        # Fixed argv, no shell; namespace validated against NAMESPACE_RE above.
-        out = subprocess.run(  # noqa: S603  # nosemgrep
+        # Fixed argv, no shell; namespace is a literal selected above.
+        out = subprocess.run(  # noqa: S603
             [
                 kubectl,
                 "-n",
-                args.namespace,
+                namespace,
                 "get",
                 "deploy",
                 "-l",
@@ -75,7 +80,7 @@ def main() -> int:
         if out.returncode == 0:
             items = json.loads(out.stdout).get("items", [])
             if items and all(rollout_complete(d, digest) for d in items):
-                print(f"{args.namespace} is running {digest[:19]}")
+                print(f"{namespace} is running {digest[:19]}")
                 return 0
         time.sleep(15)
     print(f"timed out waiting for {args.namespace} to run {digest[:19]}", file=sys.stderr)
