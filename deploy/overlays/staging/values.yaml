@@ -5,3 +5,7 @@ gateway:
     jwksUrl: ""
   budgets:
     defaultMaxBudgetUsd: 2
+# NetworkPolicies, like the namespace and quota, are owned by the platform team and
+# excluded from the Argo CD AppProject; the chart must not render one here.
+networkPolicy:
+  enabled: false
