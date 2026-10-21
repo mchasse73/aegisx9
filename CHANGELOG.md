@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Public-repository preparation: an `identifier check` CI job that fails on internal
+  identifiers (patterns stored encoded, never printed), and a log redaction filter used by
+  the self-hosted workflows so Terraform plan bodies and internal URLs stay out of public
+  Actions logs (refs #1).
+
 ### Changed
 - Release signs and attests in cosign's legacy layout so the cluster's keyless image
   verifier finds the signature; overlays no longer render a NetworkPolicy (platform-owned);

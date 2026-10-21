@@ -41,6 +41,13 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
+      - name: mask internal values in the public log
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          VALUE: ${{ vars.TF_CLOUD_HOSTNAME }}
+        with:
+          script: |
+            if (process.env.VALUE) core.setSecret(process.env.VALUE);
       - name: apply via TFE (aegisx9-staging)
         env:
           TF_CLOUD_HOSTNAME: ${{ vars.TF_CLOUD_HOSTNAME }}
@@ -49,8 +56,13 @@ jobs:
           set -euo pipefail
           export "TF_TOKEN_${TF_CLOUD_HOSTNAME//./_}=${TFE_TOKEN}"
           unset TFE_TOKEN
-          terraform -chdir=infra/staging init -input=false
-          terraform -chdir=infra/staging apply -input=false -auto-approve
+          # Logs are public once the repository is: keep plan bodies in Terraform Enterprise
+          # and print only the run identifier, the apply summary and errors, with internal
+          # identifiers masked.
+          terraform -chdir=infra/staging init -input=false 2>&1 \
+            | python3 scripts/ci/redact_log.py --mask-env TF_CLOUD_HOSTNAME --terraform-summary
+          terraform -chdir=infra/staging apply -input=false -auto-approve 2>&1 \
+            | python3 scripts/ci/redact_log.py --mask-env TF_CLOUD_HOSTNAME --terraform-summary
 
   prod:
     needs: [staging]
@@ -70,6 +82,13 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
+      - name: mask internal values in the public log
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          VALUE: ${{ vars.TF_CLOUD_HOSTNAME }}
+        with:
+          script: |
+            if (process.env.VALUE) core.setSecret(process.env.VALUE);
       - name: apply via TFE (aegisx9-prod)
         env:
           TF_CLOUD_HOSTNAME: ${{ vars.TF_CLOUD_HOSTNAME }}
@@ -78,5 +97,10 @@ jobs:
           set -euo pipefail
           export "TF_TOKEN_${TF_CLOUD_HOSTNAME//./_}=${TFE_TOKEN}"
           unset TFE_TOKEN
-          terraform -chdir=infra/prod init -input=false
-          terraform -chdir=infra/prod apply -input=false -auto-approve
+          # Logs are public once the repository is: keep plan bodies in Terraform Enterprise
+          # and print only the run identifier, the apply summary and errors, with internal
+          # identifiers masked.
+          terraform -chdir=infra/prod init -input=false 2>&1 \
+            | python3 scripts/ci/redact_log.py --mask-env TF_CLOUD_HOSTNAME --terraform-summary
+          terraform -chdir=infra/prod apply -input=false -auto-approve 2>&1 \
+            | python3 scripts/ci/redact_log.py --mask-env TF_CLOUD_HOSTNAME --terraform-summary

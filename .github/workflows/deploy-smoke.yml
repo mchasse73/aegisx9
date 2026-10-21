@@ -30,6 +30,13 @@ jobs:
         run: |
           grep -oE 'sha256:[0-9a-f]{64}' deploy/overlays/prod/kustomization.yaml > digest.txt
           python3 redteam/wait_for_rollout.py --namespace aegisx9-prod --digest-file digest.txt
+      - name: mask internal values in the public log
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          VALUE: ${{ vars.AEGIS_PROD_URL }}
+        with:
+          script: |
+            if (process.env.VALUE) core.setSecret(process.env.VALUE);
       - name: health checks
         env:
           AEGIS_PROD_URL: ${{ vars.AEGIS_PROD_URL }}
