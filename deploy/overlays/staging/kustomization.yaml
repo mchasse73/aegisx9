@@ -14,5 +14,5 @@ helmCharts:
     valuesFile: values.yaml
 images:
   - name: ghcr.io/mchasse73/aegisx9
-    # Signed digest from the release workflow for main 63a93a8 (2026-10-21).
-    digest: sha256:1351836702c63ee8b3827e753e1d988631d3f634dffe987b8250d325b391cf79
+    # Signed digest (legacy cosign layout) from the release workflow for main db329c9 (2026-10-21).
+    digest: sha256:87a88dca9886d7677c9b8c7fe663b9efe58c5556ff574eb6b3c69bdb0daa9e52
