@@ -1,0 +1,59 @@
+# AegisX9 external vantage: daily exposure scan (ports, TLS, HTTP exposure, nuclei, DNS).
+# Installed by the x9.aegisx9.scanner role (or cloud-init on first boot).
+# Exit status 1 = alerts raised: the unit is marked failed on purpose so the host's
+# unit state mirrors the scan result. Exit 2 = configuration error.
+[Unit]
+Description=AegisX9 external vantage daily exposure scan
+Documentation=https://github.com/mchasse73/aegisx9/tree/main/scanner
+After=network-online.target aegisx9-scanner-env.service
+Wants=network-online.target
+Requires=aegisx9-scanner-env.service
+
+[Service]
+Type=oneshot
+# Static service user: nmap needs CAP_NET_RAW (-sS, -sU) and CAP_NET_ADMIN, and ambient
+# capabilities are only dependable with a real user, not DynamicUser. The user is created
+# by aegisx9-scanner.sysusers.conf and owns nothing but the state directory.
+User=aegisx9-scanner
+Group=aegisx9-scanner
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+# Non-secret settings only (written at boot by aegisx9-scanner-env.service).
+EnvironmentFile=/etc/aegisx9-scanner/env
+# Secrets: systemd reads the 0600 root-owned files and exposes them to the service user
+# under $CREDENTIALS_DIRECTORY (%d). The scanner only ever sees a *_FILE path.
+LoadCredential=webhook_secret:/etc/aegisx9-scanner/webhook_secret
+Environment=AEGISX9_SCANNER_WEBHOOK_SECRET_FILE=%d/webhook_secret
+ExecStart=/opt/aegisx9-scanner/venv/bin/aegisx9-scan daily --config /etc/aegisx9-scanner --state /var/lib/aegisx9-scanner
+TimeoutStartSec=3h
+StateDirectory=aegisx9-scanner
+LogsDirectory=aegisx9-scanner
+WorkingDirectory=/var/lib/aegisx9-scanner
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+# AF_PACKET/AF_NETLINK: raw-socket scans (-sS/-sU) need them; the other units do not.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_PACKET
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@resources
+ReadOnlyPaths=/etc/aegisx9-scanner
+# Group-readable so the DynamicUser units (same group) can read the daily snapshot.
+UMask=0007

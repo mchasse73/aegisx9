@@ -1,0 +1,39 @@
+# Example workspace variables for the aegisx9-scanner root. Copy to terraform.tfvars
+# locally (ignored by git) or set them as Terraform Enterprise workspace variables.
+# Placeholders only: real ids live in the platform operations workspace.
+
+aws_region        = "us-east-1"
+vpc_id            = "vpc-0123456789abcdef0"
+subnet_id         = "subnet-0123456789abcdef0"
+eip_allocation_id = "eipalloc-0123456789abcdef0"
+
+instance_type       = "t3.small"
+volume_size         = 16
+detailed_monitoring = true
+
+cost_center = "security-external-vantage"
+owner       = "platform-operations"
+team        = "aegisx9"
+
+ses_identity_arn  = "arn:aws:ses:us-east-1:123456789012:identity/example.com"
+report_from_email = "scanner@example.com"
+report_email      = "security@example.com"
+
+nuclei_version      = "3.6.0"
+scanner_package_ref = "v0.1.0"
+
+redteam_target_url = "https://gateway.example.com"
+redteam_model      = "aegisx9-redteam"
+alert_min_severity = "medium"
+
+# SSM Parameter Store parameter NAMES (SecureString values are created out of band).
+ssm_parameter_prefix     = "/aegisx9/scanner"
+webhook_url_parameter    = "/aegisx9/scanner/webhook_url"
+webhook_secret_parameter = "/aegisx9/scanner/webhook_secret"
+tunnel_secret_parameter  = "/aegisx9/scanner/tunnel_secret"
+redteam_key_parameter    = "/aegisx9/scanner/redteam_key"
+
+# Vault AWS IAM auth: enabled by platform operations later.
+vault_aws_auth_enabled = false
+# vault_address   = "https://vault.example.com"
+# vault_auth_role = "aegisx9-scanner"

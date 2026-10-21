@@ -1,0 +1,61 @@
+# AegisX9 external vantage: weekly promptfoo + garak red-team run against the PUBLIC
+# gateway endpoint (AEGISX9_SCANNER_REDTEAM_TARGET_URL). The never-target list is checked
+# first; an unset target URL exits 0 with a note. Exit 1 = regression (alert sent).
+[Unit]
+Description=AegisX9 external vantage red-team run
+Documentation=https://github.com/mchasse73/aegisx9/tree/main/scanner
+After=network-online.target aegisx9-scanner-env.service
+Wants=network-online.target
+Requires=aegisx9-scanner-env.service
+
+[Service]
+Type=oneshot
+# Throwaway user; state and log directories are shared with the daily unit through the
+# scanner group (see the uptime unit for why StateDirectory is not used here).
+DynamicUser=yes
+Group=aegisx9-scanner
+CapabilityBoundingSet=
+EnvironmentFile=/etc/aegisx9-scanner/env
+LoadCredential=webhook_secret:/etc/aegisx9-scanner/webhook_secret
+LoadCredential=redteam_key:/etc/aegisx9-scanner/redteam_key
+Environment=AEGISX9_SCANNER_WEBHOOK_SECRET_FILE=%d/webhook_secret
+Environment=AEGISX9_SCANNER_REDTEAM_KEY_FILE=%d/redteam_key
+# promptfoo + garak configs from this repository, installed at the pinned ref.
+Environment=AEGISX9_SCANNER_REDTEAM_SUITE_DIR=/opt/aegisx9-scanner/redteam
+ExecStart=/opt/aegisx9-scanner/venv/bin/aegisx9-scan redteam --config /etc/aegisx9-scanner --state /var/lib/aegisx9-scanner
+TimeoutStartSec=2h
+ReadWritePaths=/var/lib/aegisx9-scanner /var/log/aegisx9-scanner
+CacheDirectory=aegisx9-scanner-redteam
+WorkingDirectory=/var/lib/aegisx9-scanner
+# promptfoo runs under Node.js (npx); garak under the venv. Caches go to the private
+# cache directory, never a home directory (ProtectHome).
+Environment=HOME=/var/cache/aegisx9-scanner-redteam
+Environment=NPM_CONFIG_CACHE=/var/cache/aegisx9-scanner-redteam/npm
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# MemoryDenyWriteExecute is OFF here: Node.js (promptfoo) JIT-compiles and needs W+X
+# mappings. The other two units keep it on.
+MemoryDenyWriteExecute=no
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+ReadOnlyPaths=/etc/aegisx9-scanner
+UMask=0007

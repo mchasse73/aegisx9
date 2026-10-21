@@ -1,0 +1,13 @@
+# AegisX9 external vantage: weekly red-team run, Sunday 03:00 America/New_York.
+[Unit]
+Description=Run the AegisX9 external red-team suites weekly
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00 America/New_York
+Persistent=true
+RandomizedDelaySec=15min
+AccuracySec=5min
+Unit=aegisx9-scan-redteam.service
+
+[Install]
+WantedBy=timers.target
