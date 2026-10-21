@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `.gitignore` refuses credential-shaped files in the working tree (refs #33).
 - Project onboarded into the maintainer environment: repo remote, tracking issue, docs
   collection and memory (refs #33).
 - Initial scaffold: guard pipeline interface with prompt-injection, secret and PII

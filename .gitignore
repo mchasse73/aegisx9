@@ -35,3 +35,8 @@ automation/collections/ansible_collections/*
 !automation/collections/ansible_collections/x9/
 collections/ansible_collections/
 evidence/
+
+# Never keep credentials in the tree (2026-10-21: a token file landed here once)
+.git_*
+*secret*
+!**/secrets.py
