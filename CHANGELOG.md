@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Branch protection no longer requires an approving review (single maintainer); required
+  checks, linear history, conversation resolution and admin enforcement remain (refs #1).
+- Staging overlay pinned to the first signed release digest (refs #8).
+
 ### Fixed
 - First CI run: Checkov runs one framework per step, the rollout-wait script selects the
   namespace literal by comparison (no tainted argv for SAST), and GitHub provenance
