@@ -17,3 +17,7 @@ affinity:
           labelSelector:
             matchLabels:
               app.kubernetes.io/name: aegisx9
+# NetworkPolicies, like the namespace and quota, are owned by the platform team and
+# excluded from the Argo CD AppProject; the chart must not render one here.
+networkPolicy:
+  enabled: false

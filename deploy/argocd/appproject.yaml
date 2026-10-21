@@ -1,10 +1,14 @@
+# Mirrors the live AppProject, which the platform team applies and owns (source of truth
+# in the platform repository). Namespaces, quotas, limit ranges, NetworkPolicies, RBAC,
+# Secrets and Ingress are not in the whitelist: they come from the platform team, and
+# Secrets only through ExternalSecret.
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
   name: aegisx9
   namespace: argocd
 spec:
-  description: AegisX9 secure AI gateway
+  description: AegisX9 secure AI gateway (staging + prod only)
   sourceRepos:
     - https://github.com/mchasse73/aegisx9.git
   destinations:
@@ -12,11 +16,28 @@ spec:
       namespace: aegisx9-staging
     - server: https://kubernetes.default.svc
       namespace: aegisx9-prod
-  clusterResourceWhitelist:
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
     - group: ""
-      kind: Namespace
-  namespaceResourceBlacklist:
+      kind: ConfigMap
     - group: ""
-      kind: ResourceQuota
+      kind: Service
+    - group: ""
+      kind: ServiceAccount
+    - group: apps
+      kind: Deployment
+    - group: apps
+      kind: StatefulSet
+    - group: batch
+      kind: Job
+    - group: batch
+      kind: CronJob
+    - group: policy
+      kind: PodDisruptionBudget
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+    - group: external-secrets.io
+      kind: ExternalSecret
   orphanedResources:
     warn: true
+  roles: []

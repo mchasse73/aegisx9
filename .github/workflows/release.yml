@@ -85,9 +85,13 @@ jobs:
       - name: cosign sign + attest SBOM (keyless)
         env:
           REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+        # cosign v3 defaults to the Sigstore bundle format stored as an OCI referrer and
+        # writes no legacy sha256-<digest>.sig tag. The cluster's Kyverno keyless verifier
+        # reads the legacy tag, so sign in the legacy layout (still keyless, still Rekor).
         run: |
-          cosign sign --yes "${REF}"
-          cosign attest --yes --type spdxjson --predicate sbom.spdx.json "${REF}"
+          cosign sign --yes --new-bundle-format=false --use-signing-config=false "${REF}"
+          cosign attest --yes --new-bundle-format=false --use-signing-config=false \
+            --type spdxjson --predicate sbom.spdx.json "${REF}"
           cosign verify "${REF}" \
             --certificate-identity "${SIGNER_IDENTITY}" \
             --certificate-oidc-issuer "${OIDC_ISSUER}" > /dev/null
