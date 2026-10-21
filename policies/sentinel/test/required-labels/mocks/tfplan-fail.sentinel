@@ -1,0 +1,32 @@
+resource_changes = {
+	"module.env.kubernetes_namespace_v1.aegisx9_staging": {
+		"address": "module.env.kubernetes_namespace_v1.aegisx9_staging",
+		"mode": "managed",
+		"type": "kubernetes_namespace_v1",
+		"name": "aegisx9_staging",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"metadata": [
+					{
+						"name": "aegisx9-staging",
+						"labels": {
+							"app.kubernetes.io/part-of": "aegisx9",
+						},
+					},
+				],
+			},
+		},
+	},
+}
+
+variables = {}
+
+raw = {
+	"configuration": {
+		"root_module": {},
+	},
+}
+

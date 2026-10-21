@@ -1,0 +1,38 @@
+resource_changes = {
+	"module.env.kubernetes_service_v1.lb": {
+		"address": "module.env.kubernetes_service_v1.lb",
+		"mode": "managed",
+		"type": "kubernetes_service_v1",
+		"name": "lb",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"metadata": [
+					{
+						"name": "lb",
+						"labels": {
+							"app.kubernetes.io/part-of": "aegisx9",
+							"aegisx9.io/owner": "mchasse73",
+						},
+					},
+				],
+				"spec": [
+					{
+						"type": "ClusterIP",
+					},
+				],
+			},
+		},
+	},
+}
+
+variables = {}
+
+raw = {
+	"configuration": {
+		"root_module": {},
+	},
+}
+

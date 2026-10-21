@@ -1,0 +1,5 @@
+# Runtime dependencies of the gateway image. Pinned; Dependabot proposes updates.
+# Hash-pinning (pip-compile --generate-hashes) is tracked as a Phase 1 issue.
+litellm[proxy]==1.106.2
+opentelemetry-sdk==1.45.1
+opentelemetry-exporter-otlp-proto-http==1.45.1

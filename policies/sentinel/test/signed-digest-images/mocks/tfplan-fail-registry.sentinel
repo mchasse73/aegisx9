@@ -1,0 +1,36 @@
+resource_changes = {
+	"module.env.helm_release.app": {
+		"address": "module.env.helm_release.app",
+		"mode": "managed",
+		"type": "helm_release",
+		"name": "app",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"name": "app",
+				"set": [
+					{
+						"name": "image.repository",
+						"value": "docker.io/library/nginx",
+					},
+					{
+						"name": "image.digest",
+						"value": "sha256:abababababababababababababababababababababababababababababababab",
+					},
+				],
+				"values": [],
+			},
+		},
+	},
+}
+
+variables = {}
+
+raw = {
+	"configuration": {
+		"root_module": {},
+	},
+}
+

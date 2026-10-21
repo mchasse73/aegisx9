@@ -1,0 +1,9 @@
+---
+# Vault KV v2 mount and path (per environment); credentials come from the AAP Vault credential.
+provider_key_vault_mount: "aegisx9-{{ provider_key_environment }}-kv"
+provider_key_vault_path: "providers/{{ provider_key_provider }}"
+provider_key_environment: staging
+provider_key_provider: openai
+provider_key_namespace: "aegisx9-{{ provider_key_environment }}"
+provider_key_deployment: aegisx9
+provider_key_rollout_timeout: 600

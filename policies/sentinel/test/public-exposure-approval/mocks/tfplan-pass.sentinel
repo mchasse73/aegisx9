@@ -1,0 +1,60 @@
+resource_changes = {
+	"module.env.aws_route53_record.public[\"chat.aegisx9.com\"]": {
+		"address": "module.env.aws_route53_record.public[\"chat.aegisx9.com\"]",
+		"mode": "managed",
+		"type": "aws_route53_record",
+		"name": "com\"]",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"name": "chat.aegisx9.com",
+				"type": "A",
+				"ttl": 300,
+			},
+		},
+	},
+	"module.env.kubernetes_service_v1.lb": {
+		"address": "module.env.kubernetes_service_v1.lb",
+		"mode": "managed",
+		"type": "kubernetes_service_v1",
+		"name": "lb",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"metadata": [
+					{
+						"name": "lb",
+						"labels": {
+							"app.kubernetes.io/part-of": "aegisx9",
+							"aegisx9.io/owner": "mchasse73",
+							"aegisx9.io/exposure-approval": "CHG-1",
+						},
+					},
+				],
+				"spec": [
+					{
+						"type": "LoadBalancer",
+					},
+				],
+			},
+		},
+	},
+}
+
+variables = {
+	"public_exposure_approval": {
+		"name": "public_exposure_approval",
+		"value": "CHG-1",
+	},
+}
+
+raw = {
+	"configuration": {
+		"root_module": {},
+	},
+}
+

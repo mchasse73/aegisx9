@@ -1,0 +1,5 @@
+# Every path requires review from the owner.
+*                       @mchasse73
+/.github/               @mchasse73
+/deploy/overlays/prod/  @mchasse73
+/policies/              @mchasse73

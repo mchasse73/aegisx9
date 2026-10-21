@@ -1,0 +1,49 @@
+# Route 53 changes are confined to the aegisx9.com public zone: records must be in that
+# zone, the zone lookup must be for aegisx9.com, and no hosted zone may be created or
+# destroyed from this configuration.
+import "tfplan/v2" as tfplan
+import "tfconfig/v2" as tfconfig
+import "strings"
+
+zone = "aegisx9.com"
+
+in_zone = func(name) {
+	n = strings.to_lower(strings.trim_suffix(name, "."))
+	return n is zone or strings.has_suffix(n, "." + zone)
+}
+
+records = filter tfplan.resource_changes as _, rc {
+	rc.mode is "managed" and rc.type is "aws_route53_record" and
+		(rc.change.actions contains "create" or rc.change.actions contains "update")
+}
+
+bad_records = filter records as _, rc {
+	not in_zone(rc.change.after.name else "")
+}
+
+zone_changes = filter tfplan.resource_changes as _, rc {
+	rc.mode is "managed" and rc.type is "aws_route53_zone" and
+		not (rc.change.actions is ["no-op"])
+}
+
+zone_lookups = filter tfconfig.resources as _, r {
+	r.mode is "data" and r.type is "aws_route53_zone"
+}
+
+bad_lookups = filter zone_lookups as _, r {
+	not in_zone(r.config.name.constant_value else "")
+}
+
+for bad_records as a, _ {
+	print("record outside aegisx9.com:", a)
+}
+for zone_changes as a, _ {
+	print("hosted zone changes are not allowed:", a)
+}
+for bad_lookups as a, _ {
+	print("zone lookup is not aegisx9.com:", a)
+}
+
+main = rule {
+	length(bad_records) is 0 and length(zone_changes) is 0 and length(bad_lookups) is 0
+}

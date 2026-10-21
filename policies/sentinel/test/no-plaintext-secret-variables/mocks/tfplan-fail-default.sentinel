@@ -1,0 +1,17 @@
+resource_changes = {}
+
+variables = {}
+
+raw = {
+	"configuration": {
+		"root_module": {
+			"variables": {
+				"admin_token": {
+					"sensitive": true,
+					"default": "<placeholder>",
+				},
+			},
+		},
+	},
+}
+

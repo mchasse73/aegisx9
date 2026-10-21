@@ -1,0 +1,27 @@
+# Loki ruler alerts that feed Event-Driven Ansible via Alertmanager.
+# Audit events are JSON log lines from logger "aegisx9.audit" (no content, only digests).
+groups:
+  - name: aegisx9-security
+    rules:
+      - alert: AegisX9RepeatedInjection
+        expr: |
+          sum by (namespace, principal) (
+            count_over_time(
+              {namespace=~"aegisx9-(staging|prod)"} |= "prompt_injection"
+                | json principal="event.principal", verdict="event.verdict"
+                | verdict = "block" [5m]
+            )
+          ) >= 5
+        labels:
+          severity: high
+        annotations:
+          summary: "Principal {{ $labels.principal }} triggered 5+ injection blocks in 5 minutes"
+      - alert: AegisX9AuditSigningFailed
+        expr: |
+          sum by (namespace) (
+            count_over_time({namespace=~"aegisx9-(staging|prod)"} |= "AuditSigningError" [5m])
+          ) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Audit records are not being signed"

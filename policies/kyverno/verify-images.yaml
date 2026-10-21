@@ -1,0 +1,54 @@
+# Admission control for the AegisX9 namespaces:
+#  1. every image must come from ghcr.io/mchasse73/aegisx9;
+#  2. it must carry a keyless cosign signature made by this repository's release
+#     workflow running on refs/heads/main (Sigstore Fulcio cert + Rekor entry);
+#  3. tags are rewritten to the verified digest.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: aegisx9-verify-images
+  annotations:
+    policies.kyverno.io/title: AegisX9 signed images only
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+spec:
+  background: false
+  webhookTimeoutSeconds: 30
+  rules:
+    - name: restrict-image-registry
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [aegisx9-staging, aegisx9-prod]
+      validate:
+        failureAction: Enforce
+        message: "Only images from ghcr.io/mchasse73/aegisx9 may run in AegisX9 namespaces."
+        pattern:
+          spec:
+            =(initContainers):
+              - image: "ghcr.io/mchasse73/aegisx9*"
+            containers:
+              - image: "ghcr.io/mchasse73/aegisx9*"
+    - name: verify-keyless-signature
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [aegisx9-staging, aegisx9-prod]
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/mchasse73/aegisx9*"
+          failureAction: Enforce
+          mutateDigest: true
+          verifyDigest: true
+          required: true
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    subject: "https://github.com/mchasse73/aegisx9/.github/workflows/release.yml@refs/heads/main"
+                    issuer: "https://token.actions.githubusercontent.com"
+                    rekor:
+                      url: https://rekor.sigstore.dev

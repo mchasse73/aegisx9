@@ -1,0 +1,40 @@
+# Every namespace Terraform creates gets a ResourceQuota with CPU and memory limits and a
+# LimitRange with container defaults, so no workload can run unbounded.
+import "tfplan/v2" as tfplan
+
+created = func(type) {
+	return filter tfplan.resource_changes as _, rc {
+		rc.mode is "managed" and rc.type is type and
+			(rc.change.actions contains "create" or rc.change.actions contains "update")
+	}
+}
+
+namespaces = created("kubernetes_namespace_v1")
+quotas = created("kubernetes_resource_quota_v1")
+limit_ranges = created("kubernetes_limit_range_v1")
+
+quota_ok = func(q) {
+	hard = q.change.after.spec[0].hard else {}
+	return (hard["limits.cpu"] else "") is not "" and (hard["limits.memory"] else "") is not ""
+}
+
+has = func(collection, ns, check) {
+	return any collection as _, r {
+		(r.change.after.metadata[0].namespace else "") is ns and check(r)
+	}
+}
+
+always = func(r) { return true }
+
+violations = filter namespaces as address, rc {
+	not has(quotas, rc.change.after.metadata[0].name, quota_ok) or
+		not has(limit_ranges, rc.change.after.metadata[0].name, always)
+}
+
+for violations as address, _ {
+	print(address, "has no quota with limits.cpu/limits.memory or no LimitRange")
+}
+
+main = rule {
+	length(violations) is 0
+}

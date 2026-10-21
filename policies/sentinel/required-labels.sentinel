@@ -1,0 +1,29 @@
+# Every Kubernetes object Terraform manages carries ownership labels.
+import "tfplan/v2" as tfplan
+import "strings"
+
+required = ["app.kubernetes.io/part-of", "aegisx9.io/owner"]
+
+k8s = filter tfplan.resource_changes as _, rc {
+	rc.mode is "managed" and
+		strings.has_prefix(rc.type, "kubernetes_") and
+		rc.type is not "kubernetes_manifest" and
+		(rc.change.actions contains "create" or rc.change.actions contains "update")
+}
+
+missing = func(rc) {
+	labels = rc.change.after.metadata[0].labels else {}
+	return filter required as l { (labels[l] else "") is "" }
+}
+
+violations = filter k8s as address, rc {
+	length(missing(rc)) > 0
+}
+
+for violations as address, rc {
+	print(address, "is missing labels:", missing(rc))
+}
+
+main = rule {
+	length(violations) is 0
+}

@@ -1,0 +1,42 @@
+---
+# Event-Driven Ansible: react to AegisX9 gateway security alerts.
+# Source: Alertmanager webhooks from the Loki ruler (see deploy/observability/).
+- name: AegisX9 security events
+  hosts: all
+  sources:
+    - name: Alertmanager
+      ansible.eda.alertmanager:
+        host: 0.0.0.0
+        port: 5000
+        data_alerts_path: alerts
+        data_host_path: ""
+  rules:
+    - name: Repeated prompt injection from one principal
+      condition: >-
+        event.alert.labels.alertname == "AegisX9RepeatedInjection"
+        and event.alert.status == "firing"
+      throttle:
+        once_within: 15 minutes
+        group_by_attributes:
+          - event.alert.labels.principal
+      action:
+        run_job_template:
+          name: "AegisX9 - Revoke agent key"
+          organization: AegisX9
+          job_args:
+            extra_vars:
+              incident_principal: "{{ event.alert.labels.principal }}"
+              incident_environment: "{{ event.alert.labels.environment }}"
+              incident_reason: repeated prompt-injection attempts
+
+    - name: Audit signing failures
+      condition: >-
+        event.alert.labels.alertname == "AegisX9AuditSigningFailed"
+        and event.alert.status == "firing"
+      action:
+        run_job_template:
+          name: "AegisX9 - Collect audit evidence"
+          organization: AegisX9
+          job_args:
+            extra_vars:
+              audit_evidence_environment: "{{ event.alert.labels.environment }}"

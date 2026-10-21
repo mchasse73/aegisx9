@@ -1,0 +1,36 @@
+resource_changes = {
+	"module.env.helm_release.app": {
+		"address": "module.env.helm_release.app",
+		"mode": "managed",
+		"type": "helm_release",
+		"name": "app",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"name": "app",
+				"set": [
+					{
+						"name": "image.repository",
+						"value": "ghcr.io/mchasse73/aegisx9",
+					},
+					{
+						"name": "image.tag",
+						"value": "latest",
+					},
+				],
+				"values": [],
+			},
+		},
+	},
+}
+
+variables = {}
+
+raw = {
+	"configuration": {
+		"root_module": {},
+	},
+}
+

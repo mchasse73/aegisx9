@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: aegisx9
+  namespace: argocd
+spec:
+  description: AegisX9 secure AI gateway
+  sourceRepos:
+    - https://github.com/mchasse73/aegisx9.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: aegisx9-staging
+    - server: https://kubernetes.default.svc
+      namespace: aegisx9-prod
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceBlacklist:
+    - group: ""
+      kind: ResourceQuota
+  orphanedResources:
+    warn: true

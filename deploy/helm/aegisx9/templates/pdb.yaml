@@ -1,0 +1,15 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ include "aegisx9.fullname" . }}
+  labels:
+    {{- include "aegisx9.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      {{- include "aegisx9.selectorLabels" . | nindent 6 }}
+{{- end }}

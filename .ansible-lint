@@ -1,0 +1,14 @@
+---
+profile: production
+exclude_paths:
+  - .github/
+  - deploy/
+  - policies/
+  - redteam/
+  - infra/
+  - src/
+  - tests/
+  - docs/
+kinds:
+  - playbook: "automation/playbooks/*.yml"
+  - rulebook: "extensions/eda/rulebooks/*.yml"

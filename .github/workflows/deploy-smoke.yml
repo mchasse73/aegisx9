@@ -1,0 +1,39 @@
+# Post-deploy smoke test for production, from inside the cluster.
+# SECURITY: self-hosted ARC runner; push-to-main only, guarded, protected environment.
+# Never add a pull_request trigger. See SECURITY.md "CI runner policy".
+name: deploy-smoke
+
+on:
+  push:
+    branches: [main]
+    paths: ["deploy/overlays/prod/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-prod:
+    if: >-
+      github.repository == 'mchasse73/aegisx9'
+      && github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: aegisx9-arc
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: wait for prod to run the promoted digest
+        run: |
+          grep -oE 'sha256:[0-9a-f]{64}' deploy/overlays/prod/kustomization.yaml > digest.txt
+          python3 redteam/wait_for_rollout.py --namespace aegisx9-prod --digest-file digest.txt
+      - name: health checks
+        env:
+          AEGIS_PROD_URL: ${{ vars.AEGIS_PROD_URL }}
+        run: |
+          curl -fsS --max-time 10 "${AEGIS_PROD_URL}/health/liveliness" > /dev/null
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${AEGIS_PROD_URL}/v1/models")
+          [ "${code}" = "401" ] || { echo "unauthenticated /v1/models returned ${code}, expected 401"; exit 1; }

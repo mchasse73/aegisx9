@@ -1,0 +1,18 @@
+# Argo CD renders this with `kustomize build --enable-helm`.
+# Promotion = a PR that changes images[].digest below.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: aegisx9-prod
+resources:
+  - namespace.yaml
+helmGlobals:
+  chartHome: ../../helm
+helmCharts:
+  - name: aegisx9
+    releaseName: aegisx9
+    namespace: aegisx9-prod
+    valuesFile: values.yaml
+images:
+  - name: ghcr.io/mchasse73/aegisx9
+    # Not yet released: replaced by the first signed digest from the release workflow.
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

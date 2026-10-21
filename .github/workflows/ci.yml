@@ -1,0 +1,244 @@
+# Pull-request and push pipeline. Runs ONLY on GitHub-hosted runners.
+# Never add a self-hosted runner (runs-on: aegisx9-arc) to this workflow: it runs PR code.
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.12"
+  HELM_VERSION: "v3.21.2"
+  SEMGREP_VERSION: "1.182.0"
+  PIP_AUDIT_VERSION: "2.10.1"
+  TERRAFORM_VERSION: "1.15.5"
+  TFLINT_VERSION: "v0.64.0"
+  SENTINEL_VERSION: "0.41.0"
+  ANSIBLE_LINT_VERSION: "26.10.1"
+
+jobs:
+  lint-test:
+    name: lint, types, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -e '.[dev]'
+      - name: ruff
+        run: ruff check --output-format=github . && ruff format --check .
+      - name: mypy
+        run: mypy
+      - name: pytest (coverage gate in pyproject.toml)
+        run: pytest --cov-report=xml
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: coverage.xml
+          retention-days: 14
+
+  secret-scan:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
+  sast:
+    name: semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install "semgrep==${SEMGREP_VERSION}"
+      - name: semgrep scan
+        run: >-
+          semgrep scan --error --metrics=off
+          --config p/python --config p/secrets --config p/dockerfile
+          --config p/github-actions --config p/kubernetes
+
+  dependency-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install "pip-audit==${PIP_AUDIT_VERSION}"
+      - name: audit runtime requirements
+        run: pip-audit --strict -r requirements/runtime.txt
+      - name: audit dev requirements
+        run: pip-audit --strict .
+
+  iac:
+    name: helm lint, Checkov, kube-linter
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: helm lint
+        run: helm lint --strict deploy/helm/aegisx9
+      - name: render chart and overlays
+        run: |
+          mkdir -p rendered
+          helm template aegisx9 deploy/helm/aegisx9 --namespace aegisx9-ci > rendered/chart.yaml
+          for env in staging prod; do
+            kubectl kustomize --enable-helm "deploy/overlays/${env}" > "rendered/${env}.yaml"
+          done
+          cp policies/kyverno/*.yaml rendered/
+      - uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
+        with:
+          directory: rendered
+          framework: kubernetes
+          config_file: .checkov.yaml
+      - uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
+        with:
+          directory: .
+          framework: dockerfile,github_actions
+          config_file: .checkov.yaml
+      - uses: stackrox/kube-linter-action@87802a2f4e01abebb3ee3c67a3002fea71f6eae5 # v1.0.7
+        with:
+          directory: rendered
+          config: .kube-linter.yaml
+
+  image:
+    name: docker build + Trivy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [lint-test]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: aegisx9:ci-${{ github.sha }}
+          build-args: VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: aegisx9:ci-${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+  terraform:
+    name: terraform fmt, validate, tflint, Checkov
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: terraform fmt
+        run: terraform fmt -check -recursive infra
+      - name: terraform validate (no backend; TFE is never contacted from GitHub)
+        run: |
+          for root in infra/staging infra/prod; do
+            terraform -chdir="${root}" init -backend=false -input=false
+            terraform -chdir="${root}" validate
+          done
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+      - name: tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # rate limit for plugin download only
+        run: |
+          tflint --init
+          tflint --recursive --format compact
+      - uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
+        with:
+          directory: infra
+          framework: terraform
+          config_file: .checkov.yaml
+          download_external_modules: false
+
+  sentinel:
+    name: sentinel test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install sentinel (checksum-verified)
+        run: |
+          set -euo pipefail
+          base="https://releases.hashicorp.com/sentinel/${SENTINEL_VERSION}"
+          zip="sentinel_${SENTINEL_VERSION}_linux_amd64.zip"
+          cd "${RUNNER_TEMP}"
+          curl -fsSLO "${base}/${zip}"
+          curl -fsSLO "${base}/sentinel_${SENTINEL_VERSION}_SHA256SUMS"
+          grep " ${zip}$" "sentinel_${SENTINEL_VERSION}_SHA256SUMS" | sha256sum -c -
+          unzip -q "${zip}" -d "${RUNNER_TEMP}/bin"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+      - name: sentinel fmt + test
+        working-directory: policies/sentinel
+        run: |
+          sentinel fmt -check=true *.sentinel
+          sentinel test -verbose
+
+  ansible-lint:
+    name: ansible-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install "ansible-lint==${ANSIBLE_LINT_VERSION}"
+      - name: install pinned collections outside the source tree
+        run: ansible-galaxy collection install -r collections/requirements.yml -p "${RUNNER_TEMP}/collections"
+      - name: ansible-lint (production profile)
+        run: |
+          ANSIBLE_COLLECTIONS_PATH="${PWD}/automation/collections:${RUNNER_TEMP}/collections" \
+            ansible-lint --offline

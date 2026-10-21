@@ -1,0 +1,44 @@
+---
+- name: Require the new key from the AAP credential (environment only, never argv)
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.env', 'AEGISX9_NEW_PROVIDER_KEY') | length > 0
+    fail_msg: AEGISX9_NEW_PROVIDER_KEY is not set by the job's credential
+    quiet: true
+  no_log: true
+
+- name: Write the new provider key to Vault (new KV version; the old one stays for rollback)
+  community.hashi_vault.vault_kv2_write:
+    engine_mount_point: "{{ provider_key_vault_mount }}"
+    path: "{{ provider_key_vault_path }}"
+    data:
+      api_key: "{{ lookup('ansible.builtin.env', 'AEGISX9_NEW_PROVIDER_KEY') }}"
+  no_log: true
+
+- name: Restart the gateway so it reads the new key at startup
+  kubernetes.core.k8s:
+    state: patched
+    kind: Deployment
+    name: "{{ provider_key_deployment }}"
+    namespace: "{{ provider_key_namespace }}"
+    definition:
+      spec:
+        template:
+          metadata:
+            annotations:
+              aegisx9.io/provider-key-rotated-at: "{{ now(utc=true).isoformat() }}"
+
+- name: Wait for the rollout to finish
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    name: "{{ provider_key_deployment }}"
+    namespace: "{{ provider_key_namespace }}"
+    wait: true
+    wait_condition:
+      type: Available
+      status: "True"
+    wait_timeout: "{{ provider_key_rollout_timeout }}"
+
+- name: Record the rotation (key value is never logged)
+  ansible.builtin.debug:
+    msg: "Provider key for {{ provider_key_provider }} rotated in {{ provider_key_environment }}; revoke the previous key at the provider."

@@ -1,0 +1,5 @@
+---
+audit_evidence_environment: prod
+audit_evidence_namespace: "aegisx9-{{ audit_evidence_environment }}"
+audit_evidence_dir: "{{ playbook_dir }}/../../evidence/{{ audit_evidence_environment }}-{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}"
+audit_evidence_image: ghcr.io/mchasse73/aegisx9

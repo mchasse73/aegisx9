@@ -1,0 +1,48 @@
+# Nothing becomes reachable from outside the cluster without an approval reference:
+# public DNS records, Ingresses and LoadBalancer/NodePort Services need the workspace
+# variable `public_exposure_approval`, and Kubernetes objects also need the label
+# `aegisx9.io/exposure-approval`.
+import "tfplan/v2" as tfplan
+
+approval = tfplan.variables["public_exposure_approval"].value else ""
+
+changing = func(rc) {
+	return rc.mode is "managed" and
+		(rc.change.actions contains "create" or rc.change.actions contains "update")
+}
+
+is_public_service = func(rc) {
+	if rc.type is not "kubernetes_service_v1" {
+		return false
+	}
+	spec = rc.change.after.spec else []
+	if length(spec) is 0 {
+		return false
+	}
+	return (spec[0].type else "ClusterIP") in ["LoadBalancer", "NodePort"]
+}
+
+exposing = filter tfplan.resource_changes as _, rc {
+	changing(rc) and
+		(rc.type in ["aws_route53_record", "kubernetes_ingress_v1"] or is_public_service(rc))
+}
+
+label_ok = func(rc) {
+	if rc.type is "aws_route53_record" {
+		return true
+	}
+	labels = rc.change.after.metadata[0].labels else {}
+	return (labels["aegisx9.io/exposure-approval"] else "") is not ""
+}
+
+violations = filter exposing as address, rc {
+	approval is "" or not label_ok(rc)
+}
+
+for violations as address, _ {
+	print("public exposure without approval:", address)
+}
+
+main = rule {
+	length(violations) is 0
+}

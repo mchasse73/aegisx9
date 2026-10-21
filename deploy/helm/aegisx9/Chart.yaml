@@ -1,0 +1,12 @@
+apiVersion: v2
+name: aegisx9
+description: AegisX9 secure AI gateway (LiteLLM proxy with guard pipeline and audit)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/mchasse73/aegisx9
+sources:
+  - https://github.com/mchasse73/aegisx9
+maintainers:
+  - name: Michael Chasse
+    url: https://github.com/mchasse73

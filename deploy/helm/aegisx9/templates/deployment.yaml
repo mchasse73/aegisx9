@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ include "aegisx9.fullname" . }}
+  labels:
+    {{- include "aegisx9.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "aegisx9.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aegisx9.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "aegisx9.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: {{ include "aegisx9.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--config", "/etc/aegisx9/config.yaml", "--port", "{{ .Values.service.port }}"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: HOME
+              value: /tmp
+            {{- if .Values.gateway.oidc.enabled }}
+            - name: JWT_PUBLIC_KEY_URL
+              value: {{ .Values.gateway.oidc.jwksUrl | quote }}
+            - name: JWT_AUDIENCE
+              value: {{ .Values.gateway.oidc.audience | quote }}
+            {{- end }}
+            {{- if .Values.gateway.otel.enabled }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.gateway.otel.endpoint | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.gateway.otel.serviceName | quote }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/aegisx9
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "aegisx9.fullname" . }}-config
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

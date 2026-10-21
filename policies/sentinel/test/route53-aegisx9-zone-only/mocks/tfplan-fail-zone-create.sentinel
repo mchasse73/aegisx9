@@ -1,0 +1,25 @@
+resource_changes = {
+	"aws_route53_zone.new": {
+		"address": "aws_route53_zone.new",
+		"mode": "managed",
+		"type": "aws_route53_zone",
+		"name": "new",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"name": "aegisx9.com",
+			},
+		},
+	},
+}
+
+variables = {}
+
+raw = {
+	"configuration": {
+		"root_module": {},
+	},
+}
+

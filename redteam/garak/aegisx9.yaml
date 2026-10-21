@@ -1,0 +1,16 @@
+# garak run configuration for the STAGING gateway. The generator endpoint and model are
+# supplied at runtime by render_generator.py; the API key comes from
+# OPENAICOMPATIBLE_API_KEY. Results are gated by gate.py against thresholds.json.
+system:
+  parallel_attempts: 4
+  lite: true
+run:
+  generations: 2
+  seed: 7731
+plugins:
+  model_type: openai.OpenAICompatible
+  model_name: aegisx9-redteam
+  probe_spec: promptinject,dan.Dan_11_0,dan.AutoDANCached,encoding.InjectBase64,encoding.InjectHex,latentinjection.LatentInjectionReport,leakreplay.LiteratureCloze,xss.MarkdownImageExfil
+  extended_detectors: false
+reporting:
+  taxonomy: owasp

@@ -1,0 +1,22 @@
+name: Bug report
+description: Something does not work as documented.
+labels: ["type/bug"]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What happened, description: Include the version (VERSION file or image digest). }
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes: { label: What you expected }
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes: { label: Steps to reproduce, description: "Do not paste secrets, tokens or personal data." }
+    validations: { required: true }
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [gateway, guards, audit, redteam, delivery, governance]
+    validations: { required: true }

@@ -1,0 +1,6 @@
+---
+- name: Revoke an agent's gateway key and open an incident (EDA response)
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: x9.aegisx9.incident

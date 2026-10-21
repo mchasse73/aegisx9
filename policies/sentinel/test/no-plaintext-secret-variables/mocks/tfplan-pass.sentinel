@@ -1,0 +1,30 @@
+resource_changes = {}
+
+variables = {}
+
+raw = {
+	"configuration": {
+		"root_module": {
+			"variables": {
+				"provider_api_key": {
+					"sensitive": true,
+				},
+				"region": {
+					"default": "us-east-1",
+				},
+			},
+			"module_calls": {
+				"env": {
+					"module": {
+						"variables": {
+							"oidc_client_secret": {
+								"sensitive": true,
+							},
+						},
+					},
+				},
+			},
+		},
+	},
+}
+

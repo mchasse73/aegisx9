@@ -1,0 +1,22 @@
+---
+namespace: x9
+name: aegisx9
+version: 0.1.0
+readme: README.md
+authors:
+  - Michael Chasse
+description: Day-2 automation for the AegisX9 secure AI gateway (key rotation, upgrades, audit evidence, incident response).
+license:
+  - Apache-2.0
+tags:
+  - security
+  - ai
+  - kubernetes
+  - vault
+dependencies:
+  kubernetes.core: ">=6.0.0"
+  community.hashi_vault: ">=7.0.0"
+repository: https://github.com/mchasse73/aegisx9
+issues: https://github.com/mchasse73/aegisx9/issues
+build_ignore:
+  - "*.tar.gz"

@@ -1,0 +1,6 @@
+---
+- name: Rotate a model-provider key
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: x9.aegisx9.provider_key

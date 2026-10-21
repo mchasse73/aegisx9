@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ include "aegisx9.fullname" . }}-config
+  labels:
+    {{- include "aegisx9.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    model_list:
+    {{- range .Values.gateway.models }}
+      - model_name: {{ .name }}
+        litellm_params:
+          model: {{ .model }}
+          api_key: os.environ/{{ .apiKeyEnv }}
+          rpm: {{ .rpm }}
+          max_tokens: {{ .maxTokens }}
+    {{- end }}
+    litellm_settings:
+      callbacks: ["{{ .Values.gateway.guards.callback }}"]
+      drop_params: true
+      turn_off_message_logging: true
+      redact_messages_in_exceptions: true
+      {{- if .Values.gateway.otel.enabled }}
+      success_callback: ["otel"]
+      failure_callback: ["otel"]
+      {{- end }}
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+      disable_spend_logs: false
+      max_budget: {{ .Values.gateway.budgets.defaultMaxBudgetUsd }}
+      budget_duration: {{ .Values.gateway.budgets.budgetDuration }}
+      {{- if .Values.gateway.oidc.enabled }}
+      enable_jwt_auth: true
+      litellm_jwtauth:
+        user_id_jwt_field: {{ .Values.gateway.oidc.userIdClaim | quote }}
+        team_ids_jwt_field: {{ .Values.gateway.oidc.teamIdClaim | quote }}
+        user_id_upsert: true
+      {{- end }}

@@ -1,0 +1,90 @@
+resource_changes = {
+	"module.env.kubernetes_namespace_v1.aegisx9_staging": {
+		"address": "module.env.kubernetes_namespace_v1.aegisx9_staging",
+		"mode": "managed",
+		"type": "kubernetes_namespace_v1",
+		"name": "aegisx9_staging",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"metadata": [
+					{
+						"name": "aegisx9-staging",
+						"labels": {
+							"app.kubernetes.io/part-of": "aegisx9",
+							"aegisx9.io/owner": "mchasse73",
+						},
+					},
+				],
+			},
+		},
+	},
+	"module.env.kubernetes_resource_quota_v1.aegisx9_staging": {
+		"address": "module.env.kubernetes_resource_quota_v1.aegisx9_staging",
+		"mode": "managed",
+		"type": "kubernetes_resource_quota_v1",
+		"name": "aegisx9_staging",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"metadata": [
+					{
+						"name": "q",
+						"namespace": "aegisx9-staging",
+						"labels": {
+							"app.kubernetes.io/part-of": "aegisx9",
+							"aegisx9.io/owner": "mchasse73",
+						},
+					},
+				],
+				"spec": [
+					{
+						"hard": {
+							"limits.cpu": "4",
+							"limits.memory": "8Gi",
+						},
+					},
+				],
+			},
+		},
+	},
+	"module.env.kubernetes_limit_range_v1.aegisx9_staging": {
+		"address": "module.env.kubernetes_limit_range_v1.aegisx9_staging",
+		"mode": "managed",
+		"type": "kubernetes_limit_range_v1",
+		"name": "aegisx9_staging",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"metadata": [
+					{
+						"name": "d",
+						"namespace": "aegisx9-staging",
+						"labels": {
+							"app.kubernetes.io/part-of": "aegisx9",
+							"aegisx9.io/owner": "mchasse73",
+						},
+					},
+				],
+				"spec": [
+					{},
+				],
+			},
+		},
+	},
+}
+
+variables = {}
+
+raw = {
+	"configuration": {
+		"root_module": {},
+	},
+}
+

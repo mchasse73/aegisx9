@@ -1,0 +1,21 @@
+name: Feature / work item
+description: A planned piece of work with acceptance criteria.
+labels: ["type/feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes: { label: Problem / goal }
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes: { label: Proposal }
+  - type: textarea
+    id: acceptance
+    attributes: { label: Acceptance criteria, description: A checklist that proves the work is done. }
+    validations: { required: true }
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [gateway, guards, audit, redteam, delivery, governance]
+    validations: { required: true }

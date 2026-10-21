@@ -1,0 +1,37 @@
+---
+- name: Validate the requested image digest
+  ansible.builtin.assert:
+    that:
+      - gateway_digest is defined
+      - gateway_digest is match('^sha256:[0-9a-f]{64}$')
+    fail_msg: gateway_digest must be a sha256 digest
+    quiet: true
+
+- name: Start the promotion workflow (opens a reviewed PR; GitOps applies it after approval)
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ gateway_repository }}/actions/workflows/promote-prod.yml/dispatches"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.env', 'AEGISX9_GITHUB_TOKEN') }}"
+      Accept: application/vnd.github+json
+    body_format: json
+    body:
+      ref: main
+      inputs:
+        digest: "{{ gateway_digest }}"
+    status_code: 204
+  no_log: true
+  when: gateway_environment == 'prod'
+
+- name: Wait until the gateway runs the requested digest
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    name: "{{ gateway_deployment }}"
+    namespace: "{{ gateway_namespace }}"
+  register: gateway_deploy
+  until: >-
+    gateway_deploy.resources | length > 0 and
+    (gateway_deploy.resources[0].spec.template.spec.containers | map(attribute='image') | select('search', gateway_digest) | list | length) > 0 and
+    (gateway_deploy.resources[0].status.availableReplicas | default(0)) == gateway_deploy.resources[0].spec.replicas
+  retries: "{{ (gateway_rollout_timeout | int / 15) | int }}"
+  delay: 15

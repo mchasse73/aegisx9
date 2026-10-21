@@ -1,0 +1,90 @@
+# Workloads deployed by Terraform use only images from the signing pipeline's registry,
+# pinned by digest. (Kyverno verifies the cosign signature at admission; this policy
+# makes sure nothing un-pinned or off-registry is ever proposed.)
+import "tfplan/v2" as tfplan
+import "strings"
+
+allowed_prefixes = ["ghcr.io/mchasse73/aegisx9", "ghcr.io/actions/"]
+digest_re = "^sha256:[0-9a-f]{64}$"
+
+allowed = func(ref) {
+	return any allowed_prefixes as p { strings.has_prefix(ref, p) }
+}
+
+pinned_ref = func(ref) {
+	return allowed(ref) and ref matches "@sha256:[0-9a-f]{64}$"
+}
+
+releases = filter tfplan.resource_changes as _, rc {
+	rc.mode is "managed" and rc.type is "helm_release" and
+		(rc.change.actions contains "create" or rc.change.actions contains "update")
+}
+
+helm_problems = func(rc) {
+	problems = []
+	sets = rc.change.after.set else []
+	settings = {}
+	for sets as s {
+		settings[s.name] = s.value
+	}
+	for settings as name, value {
+		if name matches "(^|\\.)image\\.repository$" {
+			prefix = strings.trim_suffix(name, "repository")
+			if not allowed(value) {
+				append(problems, name + " is not an allowed registry")
+			}
+			if not ((settings[prefix + "digest"] else "") matches digest_re) {
+				append(problems, prefix + "digest must be a sha256 digest")
+			}
+		}
+		if name matches "(^|\\.)image\\.tag$" and value is not "" {
+			append(problems, name + " sets a mutable tag")
+		}
+		if name matches "(^|\\.)image$" and not pinned_ref(value) {
+			append(problems, name + " must be an allowed, digest-pinned reference")
+		}
+	}
+	for (rc.change.after.values else []) as v {
+		if v matches "(?m)^\\s*tag:\\s*\\S+" {
+			append(problems, "values sets a mutable image tag")
+		}
+	}
+	return problems
+}
+
+deployments = filter tfplan.resource_changes as _, rc {
+	rc.mode is "managed" and rc.type is "kubernetes_deployment_v1" and
+		(rc.change.actions contains "create" or rc.change.actions contains "update")
+}
+
+deployment_problems = func(rc) {
+	problems = []
+	for rc.change.after.spec[0].template[0].spec[0].container as c {
+		if not pinned_ref(c.image) {
+			append(problems, "container " + c.name + " image must be allowed and digest-pinned")
+		}
+	}
+	return problems
+}
+
+violations = {}
+for releases as address, rc {
+	p = helm_problems(rc)
+	if length(p) > 0 {
+		violations[address] = p
+	}
+}
+for deployments as address, rc {
+	p = deployment_problems(rc)
+	if length(p) > 0 {
+		violations[address] = p
+	}
+}
+
+for violations as address, p {
+	print(address, p)
+}
+
+main = rule {
+	length(violations) is 0
+}

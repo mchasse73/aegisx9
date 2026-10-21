@@ -1,0 +1,27 @@
+resource_changes = {
+	"module.env.aws_route53_record.public[\"chat.example.org\"]": {
+		"address": "module.env.aws_route53_record.public[\"chat.example.org\"]",
+		"mode": "managed",
+		"type": "aws_route53_record",
+		"name": "org\"]",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"name": "chat.example.org",
+				"type": "A",
+				"ttl": 300,
+			},
+		},
+	},
+}
+
+variables = {}
+
+raw = {
+	"configuration": {
+		"root_module": {},
+	},
+}
+

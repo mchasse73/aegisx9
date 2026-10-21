@@ -1,0 +1,8 @@
+title = "aegisx9 gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Redaction placeholders are not secrets"
+regexes = ['''\[REDACTED:[a-z_]+\]''']

@@ -1,0 +1,12 @@
+name: Security hardening (non-vulnerability)
+description: A defence-in-depth improvement. Report vulnerabilities privately instead.
+labels: ["type/security"]
+body:
+  - type: textarea
+    id: control
+    attributes: { label: Control / risk addressed, description: "Reference OWASP LLM Top 10, MITRE ATLAS or NIST AI RMF where relevant." }
+    validations: { required: true }
+  - type: textarea
+    id: acceptance
+    attributes: { label: Acceptance criteria }
+    validations: { required: true }

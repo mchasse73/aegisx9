@@ -1,0 +1,24 @@
+# Requires argocd-cm: kustomize.buildOptions: "--enable-helm"
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: aegisx9-staging
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: aegisx9
+  source:
+    repoURL: https://github.com/mchasse73/aegisx9.git
+    targetRevision: main
+    path: deploy/overlays/staging
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: aegisx9-staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true

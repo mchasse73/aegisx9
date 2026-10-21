@@ -1,0 +1,76 @@
+# Default values. Environment-specific values live in deploy/overlays/<env>/values.yaml.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/mchasse73/aegisx9
+  # The overlays pin an immutable digest; the tag is only a fallback for local renders.
+  tag: main
+  digest: ""
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: ""
+
+service:
+  type: ClusterIP
+  port: 4000
+
+# Secret holding provider keys and the proxy master key. Created by External Secrets,
+# never by this chart. Expected keys: LITELLM_MASTER_KEY, AEGIS_PRINCIPAL_SALT and
+# provider keys referenced by gateway.models[].apiKeyEnv.
+existingSecret: aegisx9-gateway
+
+gateway:
+  # OIDC (JWT) authentication against the identity provider.
+  oidc:
+    enabled: true
+    jwksUrl: ""
+    audience: aegisx9
+    userIdClaim: sub
+    teamIdClaim: groups
+  models:
+    - name: default-chat
+      model: openai/gpt-4o-mini
+      apiKeyEnv: OPENAI_API_KEY
+      rpm: 60
+      maxTokens: 1024
+  budgets:
+    defaultMaxBudgetUsd: 5
+    budgetDuration: 30d
+  guards:
+    # Loaded from the image by the LiteLLM proxy.
+    callback: aegisx9.litellm_hooks.aegis_guard
+  otel:
+    enabled: true
+    endpoint: http://otel-collector.observability.svc:4318
+    serviceName: aegisx9-gateway
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+networkPolicy:
+  enabled: true
+  # Namespace allowed to reach the gateway (the ingress controller).
+  ingressNamespace: kube-system
+  # Namespace of the OpenTelemetry collector.
+  otelNamespace: observability
+  # Model providers are reached over HTTPS on the public internet.
+  egressCidr: 0.0.0.0/0
+  egressExceptCidrs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

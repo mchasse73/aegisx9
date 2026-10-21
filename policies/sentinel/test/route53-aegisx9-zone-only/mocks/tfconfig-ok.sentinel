@@ -1,0 +1,12 @@
+resources = {
+	"module.env.data.aws_route53_zone.aegisx9": {
+		"mode": "data",
+		"type": "aws_route53_zone",
+		"config": {
+			"name": {
+				"constant_value": "aegisx9.com.",
+			},
+		},
+	},
+}
+

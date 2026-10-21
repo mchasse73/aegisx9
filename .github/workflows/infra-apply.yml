@@ -1,0 +1,82 @@
+# Applies infra/ through Terraform Enterprise (CLI-driven runs; Sentinel runs in TFE).
+# TFE is internal, so this runs on the in-cluster ARC runners.
+#
+# SECURITY: self-hosted ARC runner. push-to-main and manual dispatch only, guarded `if:`,
+# protected environments with required reviewers. Never add a pull_request trigger.
+# Pull requests get fmt/validate/tflint/Checkov/Sentinel tests on GitHub-hosted runners
+# (ci.yml) instead. See SECURITY.md "CI runner policy".
+name: infra-apply
+
+on:
+  push:
+    branches: [main]
+    paths: ["infra/**", "policies/sentinel/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-apply
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: "1.15.5"
+
+jobs:
+  staging:
+    if: >-
+      github.repository == 'mchasse73/aegisx9'
+      && github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: aegisx9-arc
+    environment: staging
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: apply via TFE (aegisx9-staging)
+        env:
+          TF_CLOUD_HOSTNAME: ${{ vars.TF_CLOUD_HOSTNAME }}
+          TFE_TOKEN: ${{ secrets.TFE_TOKEN }}
+        run: |
+          set -euo pipefail
+          export "TF_TOKEN_${TF_CLOUD_HOSTNAME//./_}=${TFE_TOKEN}"
+          unset TFE_TOKEN
+          terraform -chdir=infra/staging init -input=false
+          terraform -chdir=infra/staging apply -input=false -auto-approve
+
+  prod:
+    needs: [staging]
+    if: >-
+      github.repository == 'mchasse73/aegisx9'
+      && github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: aegisx9-arc
+    environment: production
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: apply via TFE (aegisx9-prod)
+        env:
+          TF_CLOUD_HOSTNAME: ${{ vars.TF_CLOUD_HOSTNAME }}
+          TFE_TOKEN: ${{ secrets.TFE_TOKEN }}
+        run: |
+          set -euo pipefail
+          export "TF_TOKEN_${TF_CLOUD_HOSTNAME//./_}=${TFE_TOKEN}"
+          unset TFE_TOKEN
+          terraform -chdir=infra/prod init -input=false
+          terraform -chdir=infra/prod apply -input=false -auto-approve

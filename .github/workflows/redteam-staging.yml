@@ -1,0 +1,99 @@
+# Continuous red-team gate against STAGING.
+#
+# SECURITY: this workflow runs on self-hosted, ephemeral ARC runners inside the homelab
+# k3s cluster (label aegisx9-arc). It must NEVER run code from a pull request or a fork:
+#   - no pull_request / pull_request_target trigger (do not add one);
+#   - every job has an `if:` guard requiring this repository, refs/heads/main and a
+#     non-PR event, and (for workflow_run) a successful push-triggered release on main;
+#   - every job targets the protected `staging` environment (required reviewers,
+#     deployment branches limited to main).
+# See SECURITY.md "CI runner policy".
+name: redteam-staging
+
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: redteam-staging
+  cancel-in-progress: false
+
+env:
+  PROMPTFOO_VERSION: "0.124.1"
+  GARAK_VERSION: "0.17.1"
+
+jobs:
+  redteam:
+    name: garak + promptfoo vs staging
+    if: >-
+      github.repository == 'mchasse73/aegisx9'
+      && github.ref == 'refs/heads/main'
+      && github.event_name != 'pull_request'
+      && github.event_name != 'pull_request_target'
+      && (github.event_name != 'workflow_run'
+          || (github.event.workflow_run.conclusion == 'success'
+              && github.event.workflow_run.event == 'push'
+              && github.event.workflow_run.head_branch == 'main'
+              && github.event.workflow_run.head_repository.full_name == 'mchasse73/aegisx9'))
+    runs-on: aegisx9-arc
+    environment: staging
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read # download the digest artifact from the triggering release run
+    env:
+      AEGIS_STAGING_URL: ${{ vars.AEGIS_STAGING_URL }}
+      AEGIS_REDTEAM_MODEL: ${{ vars.AEGIS_REDTEAM_MODEL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: fetch released digest
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image-digest
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: wait for staging to run the released digest
+        if: github.event_name == 'workflow_run'
+        run: python3 redteam/wait_for_rollout.py --namespace aegisx9-staging --digest-file digest.txt
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: promptfoo suite
+        env:
+          AEGIS_REDTEAM_KEY: ${{ secrets.AEGIS_REDTEAM_KEY }}
+        run: |
+          npx --yes "promptfoo@${PROMPTFOO_VERSION}" eval \
+            --config redteam/promptfoo/promptfooconfig.yaml \
+            --no-cache --no-share --output redteam/results/promptfoo.json
+      - name: garak suite
+        env:
+          OPENAICOMPATIBLE_API_KEY: ${{ secrets.AEGIS_REDTEAM_KEY }}
+        run: |
+          pip install "garak==${GARAK_VERSION}"
+          python3 redteam/garak/render_generator.py > "${RUNNER_TEMP}/garak-generator.json"
+          python3 -m garak --config redteam/garak/aegisx9.yaml \
+            --generator_option_file "${RUNNER_TEMP}/garak-generator.json" \
+            --report_prefix "${RUNNER_TEMP}/garak/aegisx9"
+          python3 redteam/garak/gate.py \
+            --report "${RUNNER_TEMP}/garak/aegisx9.report.jsonl" \
+            --thresholds redteam/garak/thresholds.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: redteam-results
+          path: |
+            redteam/results/
+            ${{ runner.temp }}/garak/
+          retention-days: 30

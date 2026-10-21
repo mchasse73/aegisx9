@@ -1,0 +1,2 @@
+AegisX9 gateway {{ .Chart.AppVersion }} deployed as {{ include "aegisx9.fullname" . }} in {{ .Release.Namespace }}.
+Image: {{ include "aegisx9.image" . }}

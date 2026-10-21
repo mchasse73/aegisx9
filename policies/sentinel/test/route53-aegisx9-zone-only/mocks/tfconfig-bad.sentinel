@@ -1,0 +1,12 @@
+resources = {
+	"module.env.data.aws_route53_zone.other": {
+		"mode": "data",
+		"type": "aws_route53_zone",
+		"config": {
+			"name": {
+				"constant_value": "example.org.",
+			},
+		},
+	},
+}
+

@@ -1,0 +1,19 @@
+# kube-linter: the default check set plus security-relevant optional checks.
+checks:
+  doNotAutoAddDefaults: false
+  include:
+    - drop-net-raw-capability
+    - no-read-only-root-fs
+    - privilege-escalation-container
+    - run-as-non-root
+    - unset-cpu-requirements
+    - unset-memory-requirements
+    - no-rolling-update-strategy
+    - pdb-unhealthy-pod-eviction-policy
+    - liveness-port
+    - readiness-port
+  exclude:
+    # Staging runs a single replica by design; prod overlay runs 2 with anti-affinity + PDB.
+    - no-anti-affinity
+    # Image is pinned by digest in the overlays; the chart's default tag is a local fallback.
+    - latest-tag

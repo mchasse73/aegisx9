@@ -1,0 +1,37 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.env
+.env.*
+*.pem
+*.key
+sbom*.json
+redteam/results/
+deploy/helm/aegisx9/charts/
+deploy/overlays/*/charts/
+# Agent instructions are maintained outside this repository (they reference internal
+# infrastructure and must never be published).
+CLAUDE.md
+.claude/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+
+# Collections installed from collections/requirements.yml (only x9.aegisx9 is source)
+automation/collections/ansible_collections/*
+!automation/collections/ansible_collections/x9/
+collections/ansible_collections/
+evidence/

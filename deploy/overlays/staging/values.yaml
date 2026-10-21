@@ -1,0 +1,7 @@
+replicaCount: 1
+gateway:
+  oidc:
+    # Set to the identity provider's JWKS URL for the staging application.
+    jwksUrl: ""
+  budgets:
+    defaultMaxBudgetUsd: 2

@@ -1,0 +1,29 @@
+resource_changes = {
+	"module.env.helm_release.app": {
+		"address": "module.env.helm_release.app",
+		"mode": "managed",
+		"type": "helm_release",
+		"name": "app",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"name": "app",
+				"set": [],
+				"values": [
+					"image:\n  tag: main\n",
+				],
+			},
+		},
+	},
+}
+
+variables = {}
+
+raw = {
+	"configuration": {
+		"root_module": {},
+	},
+}
+

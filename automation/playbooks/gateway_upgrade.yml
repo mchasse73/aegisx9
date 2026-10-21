@@ -1,0 +1,6 @@
+---
+- name: Upgrade the AegisX9 gateway to a signed image digest
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: x9.aegisx9.gateway

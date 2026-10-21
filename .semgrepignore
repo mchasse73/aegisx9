@@ -1,0 +1,5 @@
+# Kyverno ClusterPolicy files are admission rules, not workloads; Kubernetes workload
+# rules (e.g. run-as-non-root) do not apply to them.
+policies/kyverno/
+# Generated/third-party
+.venv/

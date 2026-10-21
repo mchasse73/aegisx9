@@ -1,0 +1,6 @@
+---
+gateway_environment: staging
+gateway_namespace: "aegisx9-{{ gateway_environment }}"
+gateway_deployment: aegisx9
+gateway_repository: mchasse73/aegisx9
+gateway_rollout_timeout: 900

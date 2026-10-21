@@ -1,0 +1,32 @@
+resource_changes = {
+	"module.env.aws_route53_record.public[\"chat.aegisx9.com\"]": {
+		"address": "module.env.aws_route53_record.public[\"chat.aegisx9.com\"]",
+		"mode": "managed",
+		"type": "aws_route53_record",
+		"name": "com\"]",
+		"change": {
+			"actions": [
+				"create",
+			],
+			"after": {
+				"name": "chat.aegisx9.com",
+				"type": "A",
+				"ttl": 300,
+			},
+		},
+	},
+}
+
+variables = {
+	"public_exposure_approval": {
+		"name": "public_exposure_approval",
+		"value": "",
+	},
+}
+
+raw = {
+	"configuration": {
+		"root_module": {},
+	},
+}
+

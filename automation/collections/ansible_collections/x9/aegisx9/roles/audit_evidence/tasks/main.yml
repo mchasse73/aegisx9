@@ -1,0 +1,47 @@
+---
+- name: Create the evidence directory
+  ansible.builtin.file:
+    path: "{{ audit_evidence_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Capture the running workload (images and digests only)
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    namespace: "{{ audit_evidence_namespace }}"
+    label_selectors:
+      - app.kubernetes.io/part-of=aegisx9
+  register: audit_evidence_deployments
+
+- name: Write the workload inventory
+  ansible.builtin.copy:
+    dest: "{{ audit_evidence_dir }}/workloads.json"
+    mode: "0600"
+    content: >-
+      {{ audit_evidence_deployments.resources
+         | map(attribute='spec.template.spec.containers')
+         | flatten | map(attribute='image') | list | to_nice_json }}
+
+- name: Capture admission policy reports for the namespace
+  kubernetes.core.k8s_info:
+    api_version: wgpolicyk8s.io/v1alpha2
+    kind: PolicyReport
+    namespace: "{{ audit_evidence_namespace }}"
+  register: audit_evidence_policy_reports
+
+- name: Write the policy summary
+  ansible.builtin.copy:
+    dest: "{{ audit_evidence_dir }}/policy-reports.json"
+    mode: "0600"
+    content: "{{ audit_evidence_policy_reports.resources | map(attribute='summary') | list | to_nice_json }}"
+
+- name: Write the evidence manifest
+  ansible.builtin.copy:
+    dest: "{{ audit_evidence_dir }}/MANIFEST.json"
+    mode: "0600"
+    content: >-
+      {{ {'environment': audit_evidence_environment,
+          'collected_at': now(utc=true).isoformat(),
+          'image': audit_evidence_image,
+          'contents': ['workloads.json', 'policy-reports.json'],
+          'note': 'Audit records are verified separately against the Vault transit key.'} | to_nice_json }}
