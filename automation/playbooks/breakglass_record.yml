@@ -1,0 +1,8 @@
+---
+- name: Record a break-glass event on the activation ledger (EDA response)
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: x9.aegisx9.breakglass
+      vars:
+        breakglass_action: record

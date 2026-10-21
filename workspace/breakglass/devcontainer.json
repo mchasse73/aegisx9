@@ -1,0 +1,56 @@
+{
+  "name": "AegisX9 break-glass workspace",
+  "image": "${localEnv:AEGISX9_WORKSPACE_IMAGE}",
+  "initializeCommand": "docker network inspect aegisx9-breakglass >/dev/null 2>&1 || docker network create aegisx9-breakglass",
+  "runArgs": [
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--read-only",
+    "--tmpfs",
+    "/tmp:rw,nosuid,nodev,size=4g",
+    "--network=aegisx9-breakglass",
+    "--pids-limit=4096",
+    "--cpus=4",
+    "--memory=8g",
+    "--hostname=aegisx9-breakglass"
+  ],
+  "containerUser": "dev",
+  "remoteUser": "dev",
+  "updateRemoteUserUID": false,
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "32gb"
+  },
+  "containerEnv": {
+    "HTTPS_PROXY": "${localEnv:AEGISX9_EGRESS_PROXY}",
+    "https_proxy": "${localEnv:AEGISX9_EGRESS_PROXY}",
+    "HTTP_PROXY": "${localEnv:AEGISX9_EGRESS_PROXY}",
+    "http_proxy": "${localEnv:AEGISX9_EGRESS_PROXY}",
+    "NO_PROXY": "localhost,127.0.0.1,::1,${localEnv:AEGISX9_NO_PROXY}",
+    "no_proxy": "localhost,127.0.0.1,::1,${localEnv:AEGISX9_NO_PROXY}",
+    "ANTHROPIC_BASE_URL": "${localEnv:AEGISX9_GATEWAY_URL}",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "${localEnv:AEGISX9_OTEL_ENDPOINT}",
+    "OTEL_SERVICE_NAME": "aegisx9-workspace",
+    "OTEL_RESOURCE_ATTRIBUTES": "aegisx9.tier=developer,aegisx9.mode=breakglass",
+    "VAULT_ADDR": "${localEnv:AEGISX9_VAULT_ADDR}",
+    "AEGISX9_EVENT_URL": "${localEnv:AEGISX9_EVENT_URL}",
+    "AEGISX9_EVENT_HMAC_FILE": "/home/dev/.aegisx9/breakglass/event.hmac",
+    "AEGISX9_SYNC_TARGET": "${localEnv:AEGISX9_SYNC_TARGET}",
+    "AEGISX9_BREAKGLASS": "1"
+  },
+  "remoteEnv": {
+    "PATH": "/workspaces/breakglass/bin:${containerEnv:PATH}"
+  },
+  "mounts": [
+    "source=aegisx9-breakglass-home,target=/home/dev,type=volume",
+    "source=${localEnv:AEGISX9_EVENT_HMAC_FILE},target=/home/dev/.aegisx9/breakglass/event.hmac,type=bind,readonly"
+  ],
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/breakglass,type=bind,readonly",
+  "workspaceFolder": "/home/dev",
+  "postCreateCommand": "chmod 700 /home/dev && mkdir -p /home/dev/.aegisx9/handoff /home/dev/.aegisx9/memory /home/dev/.claude/projects /home/dev/work && chmod 700 /home/dev/.aegisx9",
+  "capAdd": [],
+  "privileged": false,
+  "init": true,
+  "shutdownAction": "stopContainer"
+}

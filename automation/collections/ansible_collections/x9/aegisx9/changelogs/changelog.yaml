@@ -1,6 +1,11 @@
 ---
 ancestor: null
 releases:
+  0.2.0:
+    changes:
+      minor_changes:
+        - breakglass role, "Break-glass record" and "Break-glass window" playbooks for the local break-glass workspace events.
+    release_date: "2026-10-21"
   0.1.0:
     changes:
       major_changes:

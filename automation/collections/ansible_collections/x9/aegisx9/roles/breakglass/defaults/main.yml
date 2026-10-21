@@ -1,0 +1,22 @@
+---
+# record: append the event to the activation's ledger issue. expire: wait for the declared
+# window to end, revoke the Vault token by accessor, then record the expiry.
+breakglass_action: record
+breakglass_event: activation
+breakglass_activation_id: ""
+breakglass_who: ""
+breakglass_started_at: ""
+breakglass_expires_at: ""
+breakglass_window_hours: 0
+breakglass_device: ""
+breakglass_result: ""
+breakglass_files: 0
+breakglass_bytes: 0
+breakglass_revoked: false
+# Token accessor from the activation event (an accessor can revoke or inspect a token but
+# never authenticate as it). Supplied by EDA; never logged.
+breakglass_token_accessor: ""
+# Hard cap on how long the expiry job waits, regardless of the declared window.
+breakglass_max_window_hours: 72
+breakglass_repository: mchasse73/aegisx9-incidents
+breakglass_vault_token_path: auth/token

@@ -1,0 +1,15 @@
+# Template variables for `coder templates push --variables-file`. Copy to a file that is
+# NOT committed (*.tfvars is ignored) or pass each as --variable name=value.
+# Nothing here is a secret: the workspace image is public once signed, and the gateway
+# authenticates developers by identity, not by key.
+
+namespace              = "aegisx9-dev"
+workspace_image        = "ghcr.io/mchasse73/aegisx9/workspace"
+workspace_image_digest = "sha256:<64 hex characters from the workspace image release>"
+image_pull_secret      = "" # set to the pull Secret name while the image is private
+home_size              = "50Gi"
+storage_class          = "" # cluster default
+gateway_url            = "https://<gateway host>"
+otel_endpoint          = "http://<otel collector service>:4318"
+agent_arch             = "amd64"
+ssh_port               = 2222
