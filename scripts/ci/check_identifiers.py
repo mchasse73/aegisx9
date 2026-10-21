@@ -13,7 +13,7 @@ from pathlib import Path
 
 from identifiers import find, load_patterns
 
-SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".pdf", ".b64"}
+SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".pdf"}
 
 
 def tracked_files() -> list[Path]:

@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 - Public-repository preparation: an `identifier check` CI job that fails on internal
-  identifiers (patterns stored encoded, never printed), and a log redaction filter used by
+  identifiers (generic patterns in the repo, organisation-specific ones only from a CI secret), and a log redaction filter used by
   the self-hosted workflows so Terraform plan bodies and internal URLs stay out of public
   Actions logs (refs #1).
 

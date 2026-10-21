@@ -50,20 +50,14 @@ jobs:
       contents: read
       actions: read # download the digest artifact from the triggering release run
     env:
-      AEGIS_STAGING_URL: ${{ vars.AEGIS_STAGING_URL }}
+      AEGIS_STAGING_URL: ${{ secrets.AEGIS_STAGING_URL }} # a secret, not a variable: masked from the first log line
+      AEGISX9_EXTRA_IDENTIFIER_PATTERNS: ${{ secrets.INTERNAL_IDENTIFIER_PATTERNS }}
       AEGIS_REDTEAM_MODEL: ${{ vars.AEGIS_REDTEAM_MODEL }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           persist-credentials: false
-      - name: mask internal values in the public log
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
-        env:
-          VALUE: ${{ vars.AEGIS_STAGING_URL }}
-        with:
-          script: |
-            if (process.env.VALUE) core.setSecret(process.env.VALUE);
       - name: fetch released digest
         if: github.event_name == 'workflow_run'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -78,6 +72,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: promptfoo suite
+        shell: bash
         env:
           AEGIS_REDTEAM_KEY: ${{ secrets.AEGIS_REDTEAM_KEY }}
         run: |
@@ -86,6 +81,7 @@ jobs:
             --no-cache --no-share --output redteam/results/promptfoo.json 2>&1 \
             | python3 scripts/ci/redact_log.py --mask-env AEGIS_STAGING_URL
       - name: garak suite
+        shell: bash
         env:
           OPENAICOMPATIBLE_API_KEY: ${{ secrets.AEGIS_REDTEAM_KEY }}
         run: |
