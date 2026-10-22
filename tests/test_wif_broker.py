@@ -185,6 +185,8 @@ def test_config_refuses_static_credential(tmp_path: Path, var: str) -> None:
     [
         {"AEGISX9_WIF_UPSTREAM": "http://api.anthropic.com"},
         {"AEGISX9_WIF_LISTEN_HOST": "0.0.0.0"},  # noqa: S104 - asserting it is refused
+        {"AEGISX9_WIF_LISTEN_HOST": "::1"},  # IPv4 listener only
+        {"AEGISX9_WIF_LISTEN_HOST": "localhost"},
         {"AEGISX9_WIF_LISTEN_PORT": "eighty"},
         {"AEGISX9_WIF_REFRESH_FRACTION": "0.95"},
     ],
@@ -1055,3 +1057,47 @@ def test_vault_http_request(tmp_path: Path) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_backoff_survives_a_long_outage(tmp_path: Path) -> None:
+    m = wb.TokenManager(_cfg(tmp_path), FakeExchange(), clock=Clock(), rng=lambda: 1.0)
+    delays = [m._backoff() for _ in range(1100)]  # past the 2.0**1024 overflow point
+    assert max(delays) == pytest.approx(wb.BACKOFF_MAX_S)
+    assert delays[-1] == pytest.approx(wb.BACKOFF_MAX_S)
+
+
+def test_short_token_is_refreshed_before_the_mandatory_margin(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    clock, ex = Clock(), FakeExchange(lifetime=60.0)
+    m = wb.TokenManager(cfg, ex, clock=clock)
+    _write_assertion(cfg)
+    delay = m.step()
+    # 80 % would be 48 s, but the token stops being served at 30 s.
+    assert delay == pytest.approx(60.0 - wb.MANDATORY_MARGIN_S - wb.REFRESH_BUFFER_S)
+    clock.now += delay - 0.1
+    assert m.is_valid()
+    assert m.step() == pytest.approx(0.1)
+    clock.now += 0.1
+    _write_assertion(cfg)
+    m.step()
+    assert len(ex.assertions) == 2
+    assert m.is_valid()
+
+
+def test_lifetime_at_or_below_margin(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    cfg = _cfg(tmp_path)
+    m = wb.TokenManager(cfg, FakeExchange(lifetime=wb.MANDATORY_MARGIN_S), clock=Clock())
+    _write_assertion(cfg)
+    with caplog.at_level(logging.WARNING, logger="aegisx9.wif_broker"):
+        assert m.step() == wb.ASSERTION_POLL_S
+    assert not m.is_valid()
+    assert any(r.getMessage() == "access token lifetime too short" for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "lifetime,expected",
+    [(3600.0, 2880.0), (120.0, 85.0), (60.0, 25.0), (36.0, wb.ASSERTION_POLL_S)],
+)
+def test_refresh_delay(tmp_path: Path, lifetime: float, expected: float) -> None:
+    m = wb.TokenManager(_cfg(tmp_path), FakeExchange(), clock=Clock())
+    assert m.refresh_delay(lifetime) == pytest.approx(expected)

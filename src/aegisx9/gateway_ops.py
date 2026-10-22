@@ -180,11 +180,17 @@ class AdminClient:
         return status, data
 
     def team_info(self, team_id: str) -> Mapping[str, Any] | None:
+        """The team's record, or None when it does not exist (HTTP 404 only). Any other
+        failure or a malformed answer raises, so a broken lookup is never read as absent."""
         status, data = self.call("GET", "/team/info?team_id=" + quote(team_id, safe=""))
-        if status != 200 or not isinstance(data, dict):
+        if status == 404:
             return None
+        if status != 200 or not isinstance(data, dict):
+            raise OpsError(f"team {team_id}: /team/info returned {status}")
         info = data.get("team_info", data)
-        return info if isinstance(info, dict) else None
+        if not isinstance(info, dict):
+            raise OpsError(f"team {team_id}: /team/info answer is malformed")
+        return info
 
 
 # -- commands --------------------------------------------------------------------------------
@@ -192,9 +198,15 @@ class AdminClient:
 
 def bootstrap_teams(client: AdminClient, plan: BudgetPlan) -> int:
     for consumer in plan.consumers:
-        exists = client.team_info(consumer.team_id) is not None
+        info = client.team_info(consumer.team_id)
+        exists = info is not None
         path = "/team/update" if exists else "/team/new"
-        status, _ = client.call("POST", path, consumer.team_payload())
+        payload = consumer.team_payload()
+        if info is not None and info.get("budget_duration") == consumer.budget_duration:
+            # LiteLLM recomputes budget_reset_at whenever budget_duration is sent; resending
+            # an unchanged value on every sync would keep postponing the budget reset.
+            payload.pop("budget_duration")
+        status, _ = client.call("POST", path, payload)
         if status != 200:
             raise OpsError(f"team {consumer.team_id}: {path} returned {status}")
         logger.info(

@@ -131,6 +131,81 @@ def test_bootstrap_creates_then_updates(tmp_path: Path) -> None:
     assert [c[1].rsplit("/", 1)[1] for c in writes] == ["update", "update"]
 
 
+def test_repeated_bootstrap_does_not_postpone_budget_reset(tmp_path: Path) -> None:
+    api, key = FakeApi(), secrets.token_urlsafe(24)
+    plan = ops.BudgetPlan.load(_write_plan(tmp_path))
+    ops.bootstrap_teams(_client(api, key), plan)
+    created = [c[3] for c in api.calls if c[1].endswith("/team/new")]
+    assert all(p["budget_duration"] == "30d" for p in created)
+    for _ in range(2):
+        api.calls.clear()
+        ops.bootstrap_teams(_client(api, key), plan)
+        updates = [c[3] for c in api.calls if c[1].endswith("/team/update")]
+        assert len(updates) == 2
+        assert all("budget_duration" not in p for p in updates)
+        assert all(p["max_budget"] > 0 for p in updates)
+    # A changed window is still sent.
+    api.teams["public-chat"]["budget_duration"] = "7d"
+    api.calls.clear()
+    ops.bootstrap_teams(_client(api, key), plan)
+    sent = {c[3]["team_id"]: c[3] for c in api.calls if c[1].endswith("/team/update")}
+    assert sent["public-chat"]["budget_duration"] == "30d"
+    assert "budget_duration" not in sent["developers"]
+
+
+@pytest.mark.parametrize(
+    "answer", [(500, None), (429, None), (200, None), (200, {"team_info": []})]
+)
+def test_team_lookup_failure_is_not_missing(tmp_path: Path, answer: tuple[int, Any]) -> None:
+    class Flaky(FakeApi):
+        def __call__(
+            self, method: str, url: str, headers: Mapping[str, str], body: bytes | None
+        ) -> tuple[int, Any]:
+            if "/team/info" in url:
+                self.calls.append((method, url, dict(headers), None))
+                return answer
+            return super().__call__(method, url, headers, body)
+
+    api = Flaky()
+    plan = ops.BudgetPlan.load(_write_plan(tmp_path))
+    with pytest.raises(ops.OpsError):
+        ops.bootstrap_teams(_client(api, secrets.token_urlsafe(8)), plan)
+    assert not any(c[1].endswith("/team/new") for c in api.calls)
+    with pytest.raises(ops.OpsError):
+        ops.check_spend(_client(api, secrets.token_urlsafe(8)), plan)
+
+
+def test_check_spend_lookup_failure_emits_failure_event(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    class Down(FakeApi):
+        def __call__(
+            self, method: str, url: str, headers: Mapping[str, str], body: bytes | None
+        ) -> tuple[int, Any]:
+            if "/team/info" in url:
+                return 502, None
+            return super().__call__(method, url, headers, body)
+
+    env = {
+        "LITELLM_MASTER_KEY": secrets.token_urlsafe(16),
+        "AEGISX9_GATEWAY_URL": "http://gateway:4000",
+        "AEGISX9_BUDGET_PLAN": _write_plan(tmp_path),
+    }
+    with caplog.at_level(logging.INFO):
+        assert ops.run(["check-spend"], env, Down()) == 1
+    events = [getattr(r, "fields", {}) for r in caplog.records]
+    assert any(e.get("event") == "aegisx9_ops_error" for e in events)
+    assert not any(e.get("event") == "aegisx9_team_missing" for e in events)
+
+
+def test_bootstrap_with_no_consumers_is_a_no_op(tmp_path: Path) -> None:
+    api = FakeApi()
+    plan = ops.BudgetPlan.load(_write_plan(tmp_path, {"proxyMaxBudgetUsd": 20, "consumers": []}))
+    assert ops.bootstrap_teams(_client(api, secrets.token_urlsafe(8)), plan) == 0
+    assert api.calls == []
+    assert ops.check_spend(_client(api, secrets.token_urlsafe(8)), plan) == 0
+
+
 def test_bootstrap_write_failure(tmp_path: Path) -> None:
     api = FakeApi(fail_writes=True)
     with pytest.raises(ops.OpsError):

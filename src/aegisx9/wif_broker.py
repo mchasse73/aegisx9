@@ -58,8 +58,14 @@ MANDATORY_MARGIN_S: Final = 30.0
 ASSERTION_POLL_S: Final = 2.0
 BACKOFF_BASE_S: Final = 1.0
 BACKOFF_MAX_S: Final = 60.0
+# 2**6 already exceeds BACKOFF_MAX_S; capping the exponent keeps the arithmetic bounded
+# however long an outage lasts (2.0 ** 1024 raises OverflowError).
+BACKOFF_MAX_EXPONENT: Final = 16
+# Refresh at least this long before a token reaches the mandatory margin.
+REFRESH_BUFFER_S: Final = 5.0
 STATUS_INTERVAL_S: Final = 30.0
-LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "::1", "localhost"})
+# IPv4 loopback only: the listener is an AF_INET ThreadingHTTPServer.
+LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1"})
 ALLOWED_PATH_PREFIXES: Final = ("/v1/messages", "/v1/models")
 ALLOWED_METHODS: Final = frozenset({"GET", "POST"})
 CHUNK_BYTES: Final = 64 * 1024
@@ -188,7 +194,7 @@ class BrokerConfig:
             raise BrokerConfigError("AEGISX9_WIF_UPSTREAM must be an https URL")
         listen_host = env.get("AEGISX9_WIF_LISTEN_HOST", "127.0.0.1")
         if listen_host not in LOOPBACK_HOSTS:
-            raise BrokerConfigError("AEGISX9_WIF_LISTEN_HOST must be a loopback address")
+            raise BrokerConfigError("AEGISX9_WIF_LISTEN_HOST must be 127.0.0.1")
         try:
             listen_port = int(env.get("AEGISX9_WIF_LISTEN_PORT", "8787"))
             refresh_fraction = float(env.get("AEGISX9_WIF_REFRESH_FRACTION", "0.8"))
@@ -410,7 +416,8 @@ class TokenManager:
 
     def _backoff(self) -> float:
         self._failures += 1
-        delay = min(BACKOFF_MAX_S, BACKOFF_BASE_S * (2.0 ** (self._failures - 1)))
+        exponent = min(self._failures - 1, BACKOFF_MAX_EXPONENT)
+        delay = min(BACKOFF_MAX_S, BACKOFF_BASE_S * (2.0**exponent))
         # Jitter in [delay/2, delay] so replicas do not retry in lockstep.
         return delay * (0.5 + 0.5 * self.rng())
 
@@ -459,14 +466,27 @@ class TokenManager:
             )
             return self._backoff()
         now = self.clock()
+        delay = self.refresh_delay(expires_in)
         with self._lock:
             self._token = token
             self._expires_at = now + expires_in
-            self._refresh_at = now + expires_in * self.cfg.refresh_fraction
+            self._refresh_at = now + delay
             self._invalid_since = None
         self._failures = 0
+        if expires_in <= MANDATORY_MARGIN_S + REFRESH_BUFFER_S:
+            logger.warning(
+                "access token lifetime too short",
+                extra={"fields": {"expires_in_s": int(expires_in)}},
+            )
         logger.info("access token acquired", extra={"fields": {"expires_in_s": int(expires_in)}})
-        return expires_in * self.cfg.refresh_fraction
+        return delay
+
+    def refresh_delay(self, expires_in: float) -> float:
+        """Seconds until the next refresh: at the configured fraction of the lifetime, but
+        always before the token enters the mandatory margin (when it stops being served).
+        Lifetimes at or below the margin are refreshed after the assertion poll interval."""
+        before_margin = expires_in - MANDATORY_MARGIN_S - REFRESH_BUFFER_S
+        return max(ASSERTION_POLL_S, min(expires_in * self.cfg.refresh_fraction, before_margin))
 
     def status_fields(self) -> dict[str, Any]:
         return {
