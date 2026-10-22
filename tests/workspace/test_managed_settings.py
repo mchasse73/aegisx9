@@ -93,8 +93,30 @@ def test_sandbox(settings: dict[str, Any]) -> None:
         "otlp.example.test",
         "vault.example.test",
     ]
-    assert "~/.aws" in sandbox["filesystem"]["denyRead"]
-    assert "~/.claude/.credentials.json" in sandbox["filesystem"]["denyRead"]
+    deny_read = sandbox["filesystem"]["denyRead"]
+    # The sandbox boundary mirrors the Read denies, nested repo paths included, so
+    # shell globbing cannot reach what the Read tool may not.
+    for path in (
+        "**/.env",
+        "**/.env.*",
+        "**/secrets/**",
+        "**/*.pem",
+        "**/*.key",
+        "~/.aws",
+        "~/.ssh",
+        "~/.claude/.credentials.json",
+        "~/.aegisx9/vault-token",
+    ):
+        assert path in deny_read
+    deny = settings["permissions"]["deny"]
+    for rule in (
+        "Read(**/.env)",
+        "Read(**/.env.*)",
+        "Read(**/secrets/**)",
+        "Read(**/*.pem)",
+        "Read(**/*.key)",
+    ):
+        assert rule in deny
 
 
 def test_hooks_fail_closed(settings: dict[str, Any]) -> None:
@@ -126,7 +148,8 @@ def test_telemetry_without_prompts(settings: dict[str, Any]) -> None:
     assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == EXAMPLE_VALUES["AEGISX9_OTLP_ENDPOINT"]
     assert env["OTEL_EXPORTER_OTLP_PROTOCOL"] == "http/protobuf"
     assert "aegisx9.workspace_image=1.2.3" in env["OTEL_RESOURCE_ATTRIBUTES"]
-    assert "OTEL_LOG_USER_PROMPTS" not in env
+    assert env["OTEL_LOG_USER_PROMPTS"] == "0"
+    assert env["OTEL_LOG_TOOL_DETAILS"] == "0"
     assert env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
     assert env["DISABLE_FEEDBACK_COMMAND"] == "1"
 

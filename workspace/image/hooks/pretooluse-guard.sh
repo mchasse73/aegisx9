@@ -15,9 +15,11 @@ block() {
 }
 trap 'block "internal error; tool call blocked (fail closed)"' ERR
 
-here=$(cd "$(dirname "$0")" && pwd)
-patterns="${AEGISX9_BASH_DENY_PATTERNS:-$here/bash-deny-patterns.txt}"
-[ -r "$patterns" ] || block "pattern file unavailable; tool call blocked (fail closed)"
+# The managed pattern file only: no environment variable can point elsewhere.
+patterns=/opt/aegisx9/hooks/bash-deny-patterns.txt
+if ! { [ -r "$patterns" ] && grep -q '[^[:space:]]' "$patterns"; }; then
+  block "pattern file unavailable or empty; tool call blocked (fail closed)"
+fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

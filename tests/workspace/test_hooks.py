@@ -61,12 +61,19 @@ def test_prompt_check_fails_closed(run_hook: RunHook, tmp_path: Path) -> None:
     payload = {"prompt": "hello"}
     crashed = run_hook("prompt-credential-check.sh", payload, _broken_grep(tmp_path))
     assert crashed.returncode == 2 and "fail closed" in crashed.stderr
-    no_patterns = run_hook(
-        "prompt-credential-check.sh",
-        payload,
-        {"AEGISX9_CREDENTIAL_PATTERNS": str(tmp_path / "none")},
+    # The managed pattern file is the only source: an override is ignored, and an
+    # empty or missing file blocks.
+    patterns = tmp_path / "opt" / "hooks" / "credential-patterns.txt"
+    ignored = run_hook(
+        "prompt-credential-check.sh", payload, {"AEGISX9_CREDENTIAL_PATTERNS": "/dev/null"}
     )
-    assert no_patterns.returncode == 2 and "pattern file" in no_patterns.stderr
+    assert ignored.returncode == 0
+    patterns.write_text("\n  \n")
+    empty = run_hook("prompt-credential-check.sh", payload)
+    assert empty.returncode == 2 and "pattern file" in empty.stderr
+    patterns.unlink()
+    missing = run_hook("prompt-credential-check.sh", payload)
+    assert missing.returncode == 2 and "pattern file" in missing.stderr
 
 
 def test_prompt_check_rejects_malformed_input(run_hook: RunHook) -> None:
@@ -103,6 +110,11 @@ def test_prompt_check_rejects_malformed_input(run_hook: RunHook) -> None:
         "cat secrets/db.yaml",
         "cat /etc/shadow",
         "cat ~/.docker/config.json",
+        "cat .en[v]",
+        "cat ./.e?v",
+        "cat *env",
+        "head .env*",
+        "cat .{e,}nv",
     ],
 )
 def test_guard_blocks_credential_access(run_hook: RunHook, command: str) -> None:
@@ -128,6 +140,10 @@ def test_guard_blocks_credential_access(run_hook: RunHook, command: str) -> None
         "cat README.md",
         "ls src/secrets.py",
         "echo $HOME",
+        "ls *.py",
+        "ls -a .*",
+        "cat .venv/pyvenv.cfg",
+        "rm -rf build/*",
     ],
 )
 def test_guard_allows_ordinary_commands(run_hook: RunHook, command: str) -> None:
@@ -142,16 +158,19 @@ def test_guard_ignores_other_tools_and_fails_closed(run_hook: RunHook, tmp_path:
         {"tool_name": "Read", "tool_input": {"file_path": "~/.aws/credentials"}},
     )
     assert other.returncode == 0
-    no_patterns = run_hook(
-        "pretooluse-guard.sh",
-        {"tool_name": "Bash", "tool_input": {"command": "ls"}},
-        {"AEGISX9_BASH_DENY_PATTERNS": str(tmp_path / "none")},
-    )
-    assert no_patterns.returncode == 2
     garbage = run_hook(
         "pretooluse-guard.sh", {"tool_name": "Bash", "tool_input": {"command": ["ls"]}}
     )
     assert garbage.returncode == 0
+    ls = {"tool_name": "Bash", "tool_input": {"command": "ls"}}
+    printenv = {"tool_name": "Bash", "tool_input": {"command": "printenv"}}
+    ignored = run_hook("pretooluse-guard.sh", printenv, {"AEGISX9_BASH_DENY_PATTERNS": "/dev/null"})
+    assert ignored.returncode == 2  # an environment override is not honoured
+    patterns = tmp_path / "opt" / "hooks" / "bash-deny-patterns.txt"
+    patterns.write_text("")
+    assert run_hook("pretooluse-guard.sh", ls).returncode == 2
+    patterns.unlink()
+    assert run_hook("pretooluse-guard.sh", ls).returncode == 2
 
 
 # --- session-end-handoff --------------------------------------------------------------
@@ -182,11 +201,16 @@ def test_session_end_tolerates_bad_input_and_fails_without_cli(
     result = run_hook("session-end-handoff.sh", {"session_id": "../x; rm -rf /"}, env)
     assert result.returncode == 0
     assert "session ..xrm-rf ended (unknown)" in (notes / "2026-01-03.md").read_text()
-    missing = run_hook(
-        "session-end-handoff.sh",
-        {"session_id": "s"},
-        {**env, "AEGISX9_HANDOFF_BIN": str(tmp_path / "nope")},
+    # An override naming another program is ignored; the managed CLI always runs.
+    rogue = tmp_path / "rogue"
+    rogue.write_text('#!/bin/sh\ntouch "$0.ran"\n')
+    rogue.chmod(0o755)
+    again = run_hook(
+        "session-end-handoff.sh", {"session_id": "s"}, {**env, "AEGISX9_HANDOFF_BIN": str(rogue)}
     )
+    assert again.returncode == 0 and not (tmp_path / "rogue.ran").exists()
+    (tmp_path / "opt" / "bin" / "handoff").unlink()
+    missing = run_hook("session-end-handoff.sh", {"session_id": "s"}, env)
     assert missing.returncode == 2 and "session-end-handoff:" in missing.stderr
 
 

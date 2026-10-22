@@ -27,9 +27,9 @@ gateway; **no static API key exists anywhere**.
 | No static credential | `apiKeyHelper: /opt/aegisx9/bin/gateway-token`; the image never sets a provider key or auth token, `workspace-init` unsets them at login, the Bash guard refuses commands that set them |
 | Model policy | `availableModels`, `deniedModels`, `enforceAvailableModels: true` |
 | Permissions | `defaultMode: default`, bypass and auto modes disabled, reads outside the working directory blocked, secret paths denied, `WebFetch`/`WebSearch`/`curl`/`wget`/`sudo` denied; only managed rules, hooks and MCP servers count |
-| Sandbox | enabled, `allowUnsandboxedCommands: false`, `failIfUnavailable: true`, network allowlist = gateway + OTLP + Vault + `AEGISX9_SANDBOX_DOMAINS`, credential paths unreadable |
-| Hooks | `UserPromptSubmit` (regex-only credential check, `image/hooks/credential-patterns.txt`), `PreToolUse(Bash)`, `SessionEnd`; every hook has `onFailure: block` and exits 2 with a one-line reason; nothing sensitive is ever echoed |
-| Telemetry | OTLP metrics and logs to `AEGISX9_OTLP_ENDPOINT`; `OTEL_LOG_USER_PROMPTS` is left unset so prompt text is never exported |
+| Sandbox | enabled, `allowUnsandboxedCommands: false`, `failIfUnavailable: true`, network allowlist = gateway + OTLP + Vault + `AEGISX9_SANDBOX_DOMAINS`; `denyRead` mirrors the Read denies (`**/.env`, `**/.env.*`, `**/secrets/**`, `**/*.pem`, `**/*.key`, home credential paths) so shell globbing cannot read them |
+| Hooks | `UserPromptSubmit` (regex-only credential check, `image/hooks/credential-patterns.txt`), `PreToolUse(Bash)`, `SessionEnd`; every hook has `onFailure: block` and exits 2 with a one-line reason; nothing sensitive is ever echoed. Hooks and the `handoff` CLI read only the managed files under `/opt/aegisx9` (no environment override); a missing or empty pattern file blocks |
+| Telemetry | OTLP metrics and logs to `AEGISX9_OTLP_ENDPOINT`; `OTEL_LOG_USER_PROMPTS` and `OTEL_LOG_TOOL_DETAILS` are set to `0` explicitly so prompt text and tool details are never exported |
 | Hygiene | `cleanupPeriodDays: 7`, connectors and remote control off, stable update channel, nonessential traffic and feedback disabled |
 | Agent rules | `claudeMd`: never print secrets, no secrets on argv, exception type names only, no credential-shaped literals, write the handoff note |
 

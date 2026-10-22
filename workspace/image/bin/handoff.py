@@ -36,6 +36,8 @@ SECTIONS = {
     "tomorrow": "First thing tomorrow",
 }
 SESSIONS = "Sessions"
+# The managed pattern file only; no environment variable can point elsewhere.
+PATTERNS_FILE = Path("/opt/aegisx9/hooks/credential-patterns.txt")
 PLACEHOLDER = "- (not recorded)"
 PLACEHOLDER_PREFIX = "- (not recorded"
 _HEADING = re.compile(r"^## (.+?)\s*$")
@@ -43,6 +45,10 @@ _HEADING = re.compile(r"^## (.+?)\s*$")
 
 class SecretShapedTextError(ValueError):
     """A bullet looked like a credential and was refused."""
+
+
+class PatternsUnavailableError(RuntimeError):
+    """The managed credential-pattern file is missing or empty (fail closed)."""
 
 
 class NoteMissingError(FileNotFoundError):
@@ -67,17 +73,15 @@ def note_path(date: str) -> Path:
 
 
 def secret_patterns() -> list[re.Pattern[str]]:
-    override = os.environ.get("AEGISX9_CREDENTIAL_PATTERNS")
-    candidates = [Path(override)] if override else []
-    candidates += [
-        Path("/opt/aegisx9/hooks/credential-patterns.txt"),
-        Path(__file__).resolve().parent.parent / "hooks" / "credential-patterns.txt",
-    ]
-    for path in candidates:
-        if path.is_file():
-            lines = path.read_text(encoding="utf-8").splitlines()
-            return [re.compile(_to_python_re(line)) for line in lines if line.strip()]
-    raise FileNotFoundError("credential-patterns")
+    """Compile the managed patterns; a missing or empty file refuses (fail closed)."""
+    try:
+        lines = PATTERNS_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError as e:
+        raise PatternsUnavailableError from e
+    patterns = [re.compile(_to_python_re(ln)) for ln in lines if ln.strip()]
+    if not patterns:
+        raise PatternsUnavailableError
+    return patterns
 
 
 def _to_python_re(pattern: str) -> str:

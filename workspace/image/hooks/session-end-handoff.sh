@@ -15,17 +15,9 @@ fail() {
 }
 trap 'fail "internal error; no handoff note written"' ERR
 
-here=$(cd "$(dirname "$0")" && pwd)
-cli="${AEGISX9_HANDOFF_BIN:-}"
-if [ -z "$cli" ]; then
-  if [ -x /opt/aegisx9/bin/handoff ]; then
-    cli=/opt/aegisx9/bin/handoff
-  elif [ -r "$here/../bin/handoff.py" ]; then
-    cli="$here/../bin/handoff.py"
-  else
-    fail "handoff CLI unavailable"
-  fi
-fi
+# Always the managed CLI: no environment variable can substitute another program.
+cli=/opt/aegisx9/bin/handoff
+[ -r "$cli" ] || fail "handoff CLI unavailable"
 
 # Only the session id and the end reason are read; both are sanitised to a safe charset.
 extract=$(cat <<'PY'

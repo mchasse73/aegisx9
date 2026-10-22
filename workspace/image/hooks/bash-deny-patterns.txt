@@ -19,3 +19,4 @@
 ANTHROPIC_(API_KEY|AUTH_TOKEN)
 VAULT_TOKEN
 (^|[;&|[:space:](])(sudo|su|doas|pkexec)([[:space:]]|$)
+(^|[[:space:]/'"=])([?*][][env?*{},.]*[env][][env?*{},.]*|\.[][env?*{},.]*([][?*{}][][env?*{},.]*[env]|[env][][env?*{},.]*[][?*{}])[][env?*{},.]*)([[:space:]'";|&)/]|$)

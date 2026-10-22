@@ -15,6 +15,11 @@
       "Read(./secrets/**)",
       "Read(*.pem)",
       "Read(*.key)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/secrets/**)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
       "Read(//home/dev/.aws/**)",
       "Read(//home/dev/.ssh/**)",
       "Read(//home/dev/.aegisx9/vault-token)",
@@ -35,7 +40,9 @@
   "allowManagedPermissionRulesOnly": true,
   "allowManagedHooksOnly": true,
   "allowManagedMcpServersOnly": true,
-  "allowedProviders": ["customEndpoint"],
+  "allowedProviders": [
+    "customEndpoint"
+  ],
   "forceLoginMethod": "gateway",
   "apiKeyHelper": "/opt/aegisx9/bin/gateway-token",
   "availableModels": "${AEGISX9_MODELS_LIST}",
@@ -50,6 +57,14 @@
     },
     "filesystem": {
       "denyRead": [
+        ".env",
+        ".env.*",
+        "**/.env",
+        "**/.env.*",
+        "secrets/**",
+        "**/secrets/**",
+        "**/*.pem",
+        "**/*.key",
         "~/.aws",
         "~/.ssh",
         "~/.aegisx9/vault-token",
@@ -111,6 +126,8 @@
     "OTEL_EXPORTER_OTLP_ENDPOINT": "${AEGISX9_OTLP_ENDPOINT}",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
     "OTEL_RESOURCE_ATTRIBUTES": "service.name=claude-code,deployment.environment=${AEGISX9_ENVIRONMENT},aegisx9.workspace_image=${AEGISX9_IMAGE_VERSION}",
+    "OTEL_LOG_USER_PROMPTS": "0",
+    "OTEL_LOG_TOOL_DETAILS": "0",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "DISABLE_FEEDBACK_COMMAND": "1",
     "VAULT_ADDR": "${AEGISX9_VAULT_ADDR}"

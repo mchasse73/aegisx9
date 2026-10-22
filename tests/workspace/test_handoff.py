@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from ws_helpers import BIN_DIR, load_script
+from ws_helpers import HOOKS_DIR, install_image_copy, load_script
 
 import samples
 
@@ -18,6 +18,7 @@ handoff = load_script("bin/handoff.py")
 
 @pytest.fixture
 def notes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setattr(handoff, "PATTERNS_FILE", HOOKS_DIR / "credential-patterns.txt")
     notes_dir = tmp_path / "handoff"
     monkeypatch.setenv("AEGISX9_HANDOFF_DIR", str(notes_dir))
     monkeypatch.setenv("AEGISX9_TODAY", "2026-03-04")
@@ -128,11 +129,26 @@ def test_errors_and_usage(notes: Path, capsys: pytest.CaptureFixture[str]) -> No
     assert handoff.main(["--help"]) == 0
 
 
-def test_secret_patterns_fallback_and_parse_roundtrip(
-    notes: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_patterns_fail_closed(
+    notes: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # An environment override is never read.
     monkeypatch.setenv("AEGISX9_CREDENTIAL_PATTERNS", str(tmp_path / "missing.txt"))
-    assert handoff.secret_patterns()  # falls back to the repo copy next to the hooks
+    assert handoff.secret_patterns()
+    monkeypatch.setattr(handoff, "PATTERNS_FILE", tmp_path / "missing.txt")
+    with pytest.raises(handoff.PatternsUnavailableError):
+        handoff.secret_patterns()
+    empty = tmp_path / "empty.txt"
+    empty.write_text("\n   \n")
+    monkeypatch.setattr(handoff, "PATTERNS_FILE", empty)
+    with pytest.raises(handoff.PatternsUnavailableError):
+        handoff.secret_patterns()
+    assert handoff.main(["add", "changed", "harmless"]) == 1
+    assert capsys.readouterr().err == "handoff: PatternsUnavailableError\n"
+    assert not (notes / "2026-03-04.md").exists()
+
+
+def test_parse_roundtrip() -> None:
     text = "# Handoff 2026-03-04\n\n## What changed\n- a\n\n## Custom\n- b\n"
     sections = handoff.parse(text)
     assert sections["Custom"] == ["- b"]
@@ -140,9 +156,10 @@ def test_secret_patterns_fallback_and_parse_roundtrip(
     assert "## Custom\n- b\n" in rendered and "## Open items\n- (not recorded)" in rendered
 
 
-def test_runs_as_a_script(notes: Path) -> None:
+def test_runs_as_a_script(notes: Path, tmp_path: Path) -> None:
+    opt = install_image_copy(tmp_path / "opt")  # the CLI reads only /opt paths
     result = subprocess.run(  # noqa: S603 - the script under test
-        [sys.executable, str(BIN_DIR / "handoff.py"), "add", "tomorrow", "Start here"],
+        [sys.executable, str(opt / "bin" / "handoff"), "add", "tomorrow", "Start here"],
         capture_output=True,
         text=True,
         env=dict(os.environ),

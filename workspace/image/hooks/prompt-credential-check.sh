@@ -17,9 +17,11 @@ block() {
 }
 trap 'block "internal error; prompt blocked (fail closed)"' ERR
 
-here=$(cd "$(dirname "$0")" && pwd)
-patterns="${AEGISX9_CREDENTIAL_PATTERNS:-$here/credential-patterns.txt}"
-[ -r "$patterns" ] || block "pattern file unavailable; prompt blocked (fail closed)"
+# The managed pattern file only: no environment variable can point elsewhere.
+patterns=/opt/aegisx9/hooks/credential-patterns.txt
+if ! { [ -r "$patterns" ] && grep -q '[^[:space:]]' "$patterns"; }; then
+  block "pattern file unavailable or empty; prompt blocked (fail closed)"
+fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
