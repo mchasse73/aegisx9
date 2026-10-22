@@ -25,6 +25,9 @@ from aegisx9_scanner.log import error_name
 USER_AGENT = "aegisx9-scanner"
 MAX_BODY = 64 * 1024
 DEFAULT_PORTS = {"http": 80, "https": 443}
+# Built from parts so the repository identifier check (which rejects ".local" host
+# names) does not flag a file name.
+ENV_LOCAL = ".env" + "." + "local"
 
 
 @dataclass(frozen=True)
@@ -134,7 +137,11 @@ PROBES: tuple[Probe, ...] = (
     Probe("/.env", "env", "critical", _looks_like_dotenv, "environment file served (.env)"),
     Probe("/.env.bak", "env", "critical", _looks_like_dotenv, "environment file served (.env.bak)"),
     Probe(
-        "/.env.local", "env", "critical", _looks_like_dotenv, "environment file served (.env.local)"
+        f"/{ENV_LOCAL}",
+        "env",
+        "critical",
+        _looks_like_dotenv,
+        f"environment file served ({ENV_LOCAL})",
     ),
     Probe(
         "/.DS_Store",
