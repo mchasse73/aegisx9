@@ -16,6 +16,6 @@ helmCharts:
     valuesFile: values.yaml
 images:
   - name: ghcr.io/mchasse73/aegisx9
-    # Signed digest (legacy cosign layout) from the release workflow for main 8c10c78 (2026-10-22):
-    # contains the federation broker and the budget jobs.
-    digest: sha256:9c3a3e0832f5212d7c5f5aa42e2c0aeb7e73cb20fe344e58fdef6647ae01c075
+    # Signed digest (legacy cosign layout) from the release workflow for main 95989c8 (2026-10-22):
+    # Prisma baked in for the budget database; key-id based signing-key check.
+    digest: sha256:25d3f297f9e52e7194a1c8c3c06020d296e3c23515fe7c303d04e6bdae7baf9c
