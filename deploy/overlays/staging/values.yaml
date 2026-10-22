@@ -3,6 +3,11 @@ gateway:
   oidc:
     # Empty on purpose: JWT_PUBLIC_KEY_URL comes from the aegisx9-gateway Secret.
     jwksUrl: ""
+  # Interim model list, unchanged from the running deployment. The staging image pinned in
+  # kustomization.yaml predates the federation broker, so Workload Identity Federation
+  # (ADR 0009) is activated by a follow-up change together with the new signed digest:
+  # these entries then become claude-haiku-5-5 / claude-sonnet-5-5 / claude-opus-5-5 with
+  # wif: true, and ANTHROPIC_API_KEY leaves the Secret.
   models:
     - name: claude-sonnet
       model: anthropic/claude-sonnet-5-5
@@ -20,7 +25,44 @@ gateway:
       rpm: 20
       maxTokens: 4096
   budgets:
-    defaultMaxBudgetUsd: 2
+    # The owner's Anthropic credits are $200/month; the gateway stops at $180 per 30 days.
+    proxyMaxBudgetUsd: 180
+    budgetDuration: 30d
+    # $20 + $30 + $50 allocated; the remaining $80 is deliberately unallocated headroom.
+    # Applied by the budget jobs, which stay off until the image that contains them is
+    # promoted (same follow-up as WIF).
+    consumers:
+      - teamId: public-chat
+        alias: Public chat
+        maxBudgetUsd: 20
+        models: [claude-haiku-5-5]
+        defaultModel: claude-haiku-5-5
+      - teamId: staging-tests
+        alias: Staging tests and red-team
+        maxBudgetUsd: 30
+        models: [claude-haiku-5-5, claude-sonnet-5-5]
+        defaultModel: claude-haiku-5-5
+      # $25 per developer; the team cap covers two developers. Raise it (within the
+      # unallocated headroom) when a developer joins. Opus is served only when a developer
+      # asks for it by name; "default" resolves to Sonnet.
+      - teamId: developers
+        alias: Developers
+        maxBudgetUsd: 50
+        memberBudgetUsd: 25
+        models: [claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5]
+        defaultModel: claude-sonnet-5-5
+    jobs:
+      enabled: false
+wif:
+  # Off until the follow-up promotes an image that contains aegisx9.wif_broker.
+  enabled: false
+  # VAULT_ADDR, Vault's CA certificate and the Vault role, identity-token path and auth
+  # mount (WIF_VAULT_*) all come from the aegisx9-gateway Secret.
+  vaultCaSecretKey: VAULT_CACERT_PEM
+  jwksCheck:
+    enabled: false
+    # Filled in after the federation issuer is created (the check logs the current digest).
+    expectedSha256: ""
 # NetworkPolicies, like the namespace and quota, are owned by the platform team and
 # excluded from the Argo CD AppProject; the chart must not render one here.
 networkPolicy:

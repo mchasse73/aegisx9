@@ -25,3 +25,103 @@ groups:
           severity: critical
         annotations:
           summary: "Audit records are not being signed"
+  # Model-provider spend against the proxy-wide and per-consumer budgets (ADR 0009). The
+  # spend-check CronJob logs one aegisx9_spend line per scope every 15 minutes.
+  - name: aegisx9-budget
+    rules:
+      - alert: AegisX9SpendAt50Percent
+        expr: |
+          max by (namespace, scope, name) (
+            max_over_time(
+              {namespace=~"aegisx9-(staging|prod)"} |= "aegisx9_spend"
+                | json event="event", scope="scope", name="name", pct="pct"
+                | event = "aegisx9_spend"
+                | unwrap pct [1h]
+            )
+          ) >= 50
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.scope }} {{ $labels.name }} has used 50% of its 30-day budget"
+      - alert: AegisX9SpendAt80Percent
+        expr: |
+          max by (namespace, scope, name) (
+            max_over_time(
+              {namespace=~"aegisx9-(staging|prod)"} |= "aegisx9_spend"
+                | json event="event", scope="scope", name="name", pct="pct"
+                | event = "aegisx9_spend"
+                | unwrap pct [1h]
+            )
+          ) >= 80
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.scope }} {{ $labels.name }} has used 80% of its 30-day budget"
+      - alert: AegisX9SpendAt100Percent
+        expr: |
+          max by (namespace, scope, name) (
+            max_over_time(
+              {namespace=~"aegisx9-(staging|prod)"} |= "aegisx9_spend"
+                | json event="event", scope="scope", name="name", pct="pct"
+                | event = "aegisx9_spend"
+                | unwrap pct [1h]
+            )
+          ) >= 100
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.scope }} {{ $labels.name }} has exhausted its 30-day budget"
+      - alert: AegisX9OpsJobFailed
+        expr: |
+          sum by (namespace, command) (
+            count_over_time(
+              {namespace=~"aegisx9-(staging|prod)"} |= "aegisx9_ops_error"
+                | json command="command" [1h]
+            )
+          ) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "AegisX9 day-2 job {{ $labels.command }} failed"
+  # Workload Identity Federation for the model provider (ADR 0009).
+  - name: aegisx9-wif
+    rules:
+      - alert: AegisX9WifNoValidToken
+        expr: |
+          max by (namespace, pod) (
+            max_over_time(
+              {namespace=~"aegisx9-(staging|prod)", container="wif-broker"} |= "wif_token_status"
+                | json invalid_for_s="invalid_for_s"
+                | unwrap invalid_for_s [2m]
+            )
+          ) >= 300
+        labels:
+          severity: critical
+        annotations:
+          summary: "Federation broker {{ $labels.pod }} has held no valid provider token for 5 minutes"
+      - alert: AegisX9FederationKeysChanged
+        expr: |
+          sum by (namespace) (
+            count_over_time(
+              {namespace=~"aegisx9-(staging|prod)"} |= "aegisx9_jwks_check"
+                | json changed="changed"
+                | changed = "true" [2h]
+            )
+          ) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Vault's OIDC signing keys changed; update the federation issuer's inline JWKS"
+      - alert: AegisX9FederationKeysBaselineMissing
+        expr: |
+          sum by (namespace) (
+            count_over_time(
+              {namespace=~"aegisx9-(staging|prod)"} |= "aegisx9_jwks_check"
+                | json baseline_missing="baseline_missing"
+                | baseline_missing = "true" [2h]
+            )
+          ) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "No expected federation-key digest is configured (wif.jwksCheck.expectedSha256)"

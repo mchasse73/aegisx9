@@ -1,3 +1,6 @@
+{{- if and (not .Values.wif.enabled) (gt (len (include "aegisx9.wifModels" . | fromJsonArray)) 0) }}
+{{- fail "gateway.models has wif: true entries but wif.enabled is false" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -12,7 +15,15 @@ data:
       - model_name: {{ .name }}
         litellm_params:
           model: {{ .model }}
+          {{- if .wif }}
+          # Reached only through the loopback federation broker, which replaces this
+          # placeholder with a short-lived access token. LiteLLM requires a non-empty key.
+          api_base: http://127.0.0.1:{{ $.Values.wif.port }}
+          api_key: unused-placeholder-not-a-secret
+          anthropic_disable_workload_identity_federation: true
+          {{- else }}
           api_key: os.environ/{{ .apiKeyEnv }}
+          {{- end }}
           rpm: {{ .rpm }}
           max_tokens: {{ .maxTokens }}
     {{- end }}
@@ -21,6 +32,9 @@ data:
       drop_params: true
       turn_off_message_logging: true
       redact_messages_in_exceptions: true
+      # Proxy-wide budget across every caller (LiteLLM reads it from litellm_settings).
+      max_budget: {{ .Values.gateway.budgets.proxyMaxBudgetUsd }}
+      budget_duration: {{ .Values.gateway.budgets.budgetDuration }}
       {{- if .Values.gateway.otel.enabled }}
       success_callback: ["otel"]
       failure_callback: ["otel"]
@@ -28,8 +42,6 @@ data:
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
       disable_spend_logs: false
-      max_budget: {{ .Values.gateway.budgets.defaultMaxBudgetUsd }}
-      budget_duration: {{ .Values.gateway.budgets.budgetDuration }}
       {{- if .Values.gateway.oidc.enabled }}
       enable_jwt_auth: true
       litellm_jwtauth:
