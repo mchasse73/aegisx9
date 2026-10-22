@@ -16,6 +16,8 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 - Day-2 jobs retry connection failures for up to 60 seconds (a new pod can be refused for its
   first seconds while network policy catches up) and can set a priority class (refs #53).
+- Dependency bumps: hatchling 1.32.4, pytest 9.1.1, pytest-cov 7.1.0, ruff 0.17.1, mypy 2.4.0,
+  checkov-action 12.3134.0 (supersedes Dependabot PRs #34 to #39).
 
 ### Fixed
 - The guard callback subclasses LiteLLM's CustomLogger so the proxy loads it; CI boots the proxy
