@@ -169,6 +169,20 @@ spec:
                   name: {{ .Values.existingSecret }}
                   key: ANTHROPIC_WORKSPACE_ID
                   optional: true
+            # Leftover static credentials, if any, are passed in only so that the broker
+            # refuses to start (a static key would shadow federation in the gateway).
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            - name: ANTHROPIC_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: ANTHROPIC_AUTH_TOKEN
+                  optional: true
           securityContext:
             {{- include "aegisx9.containerSecurityContext" . | nindent 12 }}
           readinessProbe:

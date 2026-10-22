@@ -85,6 +85,9 @@ issuer, so the identity token has to come from an issuer the provider accepts.
 - Vault is on the request path for token refresh (not for each model call). An access token
   stays valid for up to an hour, so a short Vault outage is absorbed.
 - Budgets need the proxy database (`DATABASE_URL`); without it LiteLLM only warns.
+- Rollout is two-step: this change ships the code and chart with `wif.enabled` and the
+  budget/JWKS jobs off in staging; a follow-up promotes the signed image that contains the
+  broker and `gateway_ops` and turns them on in the same change.
 - Team budgets apply to callers whose identity-provider groups map to the team ids.
 - The broker is new code on a sensitive path; it is covered by unit tests for the exchange
   request shape, refresh timing, header replacement, SSE pass-through, health states and

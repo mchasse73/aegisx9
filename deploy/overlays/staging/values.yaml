@@ -3,29 +3,34 @@ gateway:
   oidc:
     # Empty on purpose: JWT_PUBLIC_KEY_URL comes from the aegisx9-gateway Secret.
     jwksUrl: ""
-  # Anthropic through Workload Identity Federation only (ADR 0009): no static key exists.
-  # Global inference (no inference_geo).
+  # Interim model list, unchanged from the running deployment. The staging image pinned in
+  # kustomization.yaml predates the federation broker, so Workload Identity Federation
+  # (ADR 0009) is activated by a follow-up change together with the new signed digest:
+  # these entries then become claude-haiku-5-5 / claude-sonnet-5-5 / claude-opus-5-5 with
+  # wif: true, and ANTHROPIC_API_KEY leaves the Secret.
   models:
-    - name: claude-haiku-5-5
-      model: anthropic/claude-haiku-5-5
-      wif: true
+    - name: claude-sonnet
+      model: anthropic/claude-sonnet-5-5
+      apiKeyEnv: ANTHROPIC_API_KEY
       rpm: 60
       maxTokens: 4096
-    - name: claude-sonnet-5-5
-      model: anthropic/claude-sonnet-5-5
-      wif: true
-      rpm: 30
-      maxTokens: 8192
-    - name: claude-opus-5-5
+    - name: claude-haiku
+      model: anthropic/claude-haiku-5-5
+      apiKeyEnv: ANTHROPIC_API_KEY
+      rpm: 120
+      maxTokens: 4096
+    - name: claude-opus
       model: anthropic/claude-opus-5-5
-      wif: true
-      rpm: 10
-      maxTokens: 8192
+      apiKeyEnv: ANTHROPIC_API_KEY
+      rpm: 20
+      maxTokens: 4096
   budgets:
     # The owner's Anthropic credits are $200/month; the gateway stops at $180 per 30 days.
     proxyMaxBudgetUsd: 180
     budgetDuration: 30d
     # $20 + $30 + $50 allocated; the remaining $80 is deliberately unallocated headroom.
+    # Applied by the budget jobs, which stay off until the image that contains them is
+    # promoted (same follow-up as WIF).
     consumers:
       - teamId: public-chat
         alias: Public chat
@@ -46,13 +51,16 @@ gateway:
         memberBudgetUsd: 25
         models: [claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5]
         defaultModel: claude-sonnet-5-5
+    jobs:
+      enabled: false
 wif:
-  enabled: true
+  # Off until the follow-up promotes an image that contains aegisx9.wif_broker.
+  enabled: false
   # VAULT_ADDR, Vault's CA certificate and the Vault role, identity-token path and auth
   # mount (WIF_VAULT_*) all come from the aegisx9-gateway Secret.
   vaultCaSecretKey: VAULT_CACERT_PEM
   jwksCheck:
-    enabled: true
+    enabled: false
     # Filled in after the federation issuer is created (the check logs the current digest).
     expectedSha256: ""
 # NetworkPolicies, like the namespace and quota, are owned by the platform team and

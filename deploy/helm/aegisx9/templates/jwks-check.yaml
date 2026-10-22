@@ -11,6 +11,8 @@ metadata:
   name: {{ $fullname }}-jwks-check
   labels:
     {{- include "aegisx9.labels" . | nindent 4 }}
+  annotations:
+    checkov.io/skip1: CKV_K8S_31=seccomp RuntimeDefault is set at pod and container level; the pinned Checkov does not detect it on Job/CronJob
 spec:
   schedule: {{ .Values.wif.jwksCheck.schedule | quote }}
   concurrencyPolicy: Forbid

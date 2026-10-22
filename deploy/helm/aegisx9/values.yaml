@@ -54,6 +54,10 @@ gateway:
     # for the alias "default").
     consumers: []
     jobs:
+      # Budget bootstrap Job and spend-check CronJob (python -m aegisx9.gateway_ops). They
+      # need an image that contains aegisx9.gateway_ops; enable them with that promotion.
+      # When enabled they run whenever proxyMaxBudgetUsd > 0, with or without consumers.
+      enabled: false
       # Spend check: logs aegisx9_spend lines that the Loki rules alert on (50/80/100 %).
       spendCheckSchedule: "*/15 * * * *"
       resources:
