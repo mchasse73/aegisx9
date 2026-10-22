@@ -271,28 +271,49 @@ def test_jwks_digest_is_order_independent() -> None:
         ops.jwks_digest({"keys": []})
 
 
-@pytest.mark.parametrize(
-    "expected,changed,missing",
-    [("match", False, False), ("other", True, False), ("", False, True)],
-)
-def test_check_jwks(
-    caplog: pytest.LogCaptureFixture, expected: str, changed: bool, missing: bool
-) -> None:
-    api = FakeApi(jwks=_jwks())
-    digest = ops.jwks_digest(api.jwks)
-    baseline = {"match": [digest.upper(), "x"], "other": ["0" * 64], "": [""]}[expected]
+def test_parse_kids() -> None:
+    assert ops.parse_kids("") == []
+    assert ops.parse_kids(" a, ,b,a ,") == ["a", "b"]
+
+
+@pytest.mark.parametrize("scenario", ["all_published", "one_missing", "none_configured"])
+def test_check_jwks(caplog: pytest.LogCaptureFixture, scenario: str) -> None:
+    api = FakeApi(jwks=_jwks(3))
+    published = [k["kid"] for k in api.jwks["keys"]]
+    gone = secrets.token_hex(4)
+    uploaded, missing = {
+        "all_published": ([published[1]], []),
+        "one_missing": ([published[0], gone], [gone]),
+        "none_configured": ([], []),
+    }[scenario]
     with caplog.at_level(logging.INFO, logger="aegisx9.gateway_ops"):
-        assert ops.check_jwks(api, "https://vault.example.invalid/", baseline) == 0
+        assert ops.check_jwks(api, "https://vault.example.invalid/", uploaded) == 0
     (line,) = [getattr(r, "fields", {}) for r in caplog.records]
-    assert line["changed"] is changed
-    assert line["baseline_missing"] is missing
-    assert line["sha256"] == digest
+    assert line["event"] == "aegisx9_jwks"
+    assert line["missing_uploaded_kids"] == missing
+    assert line["missing_count"] == len(missing)
+    assert line["uploaded_count"] == len(uploaded)
+    assert line["published_count"] == 3
+    assert line["sha256"] == ops.jwks_digest(api.jwks)
     method, url, headers, _ = api.calls[0]
     assert (method, url) == (
         "GET",
         "https://vault.example.invalid/v1/identity/oidc/.well-known/keys",
     )
     assert headers == {}  # unauthenticated endpoint: no token is sent
+
+
+def test_check_jwks_ignores_rotation_of_other_keys(caplog: pytest.LogCaptureFixture) -> None:
+    # The endpoint also publishes keys that rotate daily; only the uploaded kid matters.
+    api = FakeApi(jwks=_jwks(2))
+    uploaded = [api.jwks["keys"][0]["kid"]]
+    with caplog.at_level(logging.INFO, logger="aegisx9.gateway_ops"):
+        ops.check_jwks(api, "https://vault.example.invalid", uploaded)
+        api.jwks["keys"][1] = _jwks(1)["keys"][0]
+        ops.check_jwks(api, "https://vault.example.invalid", uploaded)
+    lines = [getattr(r, "fields", {}) for r in caplog.records]
+    assert [ln["missing_count"] for ln in lines] == [0, 0]
+    assert lines[0]["sha256"] != lines[1]["sha256"]
 
 
 def test_check_jwks_fetch_failure() -> None:
@@ -349,13 +370,21 @@ def test_run_reports_errors_without_values(
     }
 
 
-def test_run_check_jwks(tmp_path: Path) -> None:
+def test_run_check_jwks(caplog: pytest.LogCaptureFixture) -> None:
     api = FakeApi(jwks=_jwks())
     env = {
         "VAULT_ADDR": "https://vault.example.invalid",
-        "AEGISX9_JWKS_EXPECTED_SHA256": ops.jwks_digest(api.jwks),
+        "AEGISX9_WIF_UPLOADED_KIDS": api.jwks["keys"][0]["kid"] + ", ",
     }
-    assert ops.run(["check-jwks"], env, api) == 0
+    with caplog.at_level(logging.INFO, logger="aegisx9.gateway_ops"):
+        assert ops.run(["check-jwks"], env, api) == 0
+    (line,) = [
+        getattr(r, "fields", {})
+        for r in caplog.records
+        if getattr(r, "fields", {}).get("event") == "aegisx9_jwks"
+    ]
+    assert line["uploaded_count"] == 1
+    assert line["missing_count"] == 0
 
 
 def test_run_check_jwks_builds_tls_client(monkeypatch: pytest.MonkeyPatch) -> None:

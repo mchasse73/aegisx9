@@ -16,6 +16,9 @@ Security properties:
   broker never presents the same assertion twice (it compares SHA-256 digests; with the
   optional file source the last digest can be persisted for restarts).
 * Errors are logged by exception type name only.
+* Each new identity token's header (only the header) is decoded to read its ``kid``; a key
+  id missing from ``AEGISX9_WIF_UPLOADED_KIDS`` (the keys uploaded to the federation
+  issuer) is logged as a ``wif_kid_not_uploaded`` event. Key ids are public identifiers.
 * Only ``/v1/messages*`` and ``/v1/models*`` are forwarded; anything else is refused.
 * Response headers that identify the Anthropic organization are dropped, so they cannot
   surface to gateway callers.
@@ -25,6 +28,8 @@ Standard library only: the gateway package has no runtime dependencies of its ow
 
 from __future__ import annotations
 
+import base64
+import binascii
 import contextlib
 import hashlib
 import http.client
@@ -32,6 +37,7 @@ import json
 import logging
 import os
 import random
+import re
 import signal
 import ssl
 import sys
@@ -69,6 +75,9 @@ LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1"})
 ALLOWED_PATH_PREFIXES: Final = ("/v1/messages", "/v1/models")
 ALLOWED_METHODS: Final = frozenset({"GET", "POST"})
 CHUNK_BYTES: Final = 64 * 1024
+# A key id is logged only when it looks like one (the store uses UUIDs).
+KID_PATTERN: Final = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+MAX_JWT_HEADER_CHARS: Final = 4096
 
 # Never forwarded upstream: credentials the caller sent, hop-by-hop headers and headers
 # http.client sets itself.
@@ -160,6 +169,8 @@ class BrokerConfig:
     listen_port: int = 8787
     refresh_fraction: float = 0.8
     state_file: str | None = None
+    # Key ids of the public keys uploaded to the Anthropic federation issuer.
+    uploaded_kids: tuple[str, ...] = ()
     upstream_timeout_s: float = 600.0
     max_body_bytes: int = 32 * 1024 * 1024
 
@@ -235,6 +246,13 @@ class BrokerConfig:
             listen_port=listen_port,
             refresh_fraction=refresh_fraction,
             state_file=env.get("AEGISX9_WIF_STATE_FILE", "").strip() or None,
+            uploaded_kids=tuple(
+                dict.fromkeys(
+                    k.strip()
+                    for k in env.get("AEGISX9_WIF_UPLOADED_KIDS", "").split(",")
+                    if k.strip()
+                )
+            ),
         )
 
 
@@ -315,6 +333,23 @@ def http_exchange(cfg: BrokerConfig, timeout: float = 30.0) -> Exchange:
             conn.close()
 
     return _exchange
+
+
+def jwt_kid(token: str) -> str | None:
+    """The ``kid`` from a compact JWT's header, or None when there is none.
+
+    Only the header segment is decoded (base64url, no signature verification): the issuer
+    signed it and Anthropic verifies it. The token itself is never logged.
+    """
+    header = token.split(".", 1)[0]
+    if not header or len(header) > MAX_JWT_HEADER_CHARS:
+        return None
+    try:
+        decoded = json.loads(base64.urlsafe_b64decode(header + "=" * (-len(header) % 4)))
+    except (binascii.Error, ValueError):
+        return None
+    kid = decoded.get("kid") if isinstance(decoded, dict) else None
+    return kid if isinstance(kid, str) else None
 
 
 def _digest(value: str) -> str:
@@ -447,6 +482,7 @@ class TokenManager:
         self._waiting_logged = False
         self._last_digest = digest
         self._save_state(digest)
+        self._check_kid(assertion)
         try:
             token, expires_in = self.exchange(assertion)
         except TokenExchangeError as e:
@@ -480,6 +516,23 @@ class TokenManager:
             )
         logger.info("access token acquired", extra={"fields": {"expires_in_s": int(expires_in)}})
         return delay
+
+    def _check_kid(self, assertion: str) -> None:
+        """Warn when the identity token is signed by a key the issuer does not know.
+
+        The exchange still goes ahead (Anthropic refuses it anyway); the structured
+        ``wif_kid_not_uploaded`` line is what the alert rules key on. Key ids are public.
+        """
+        if not self.cfg.uploaded_kids:
+            return
+        kid = jwt_kid(assertion)
+        if kid is not None and kid in self.cfg.uploaded_kids:
+            return
+        safe = kid if kid is not None and KID_PATTERN.fullmatch(kid) else None
+        logger.warning(
+            "identity token signed by a key not uploaded to the federation issuer",
+            extra={"fields": {"event": "wif_kid_not_uploaded", "kid": safe}},
+        )
 
     def refresh_delay(self, expires_in: float) -> float:
         """Seconds until the next refresh: at the configured fraction of the lifetime, but
@@ -848,7 +901,10 @@ def main(env: Mapping[str, str] | None = None) -> int:
         else None
     )
     manager = TokenManager(cfg, http_exchange(cfg), source=source)
-    logger.info("identity source", extra={"fields": {"source": cfg.identity_source}})
+    logger.info(
+        "identity source",
+        extra={"fields": {"source": cfg.identity_source, "uploaded_kids": list(cfg.uploaded_kids)}},
+    )
     stop = threading.Event()
     refresher = threading.Thread(target=manager.run, args=(stop,), name="wif-refresh", daemon=True)
     refresher.start()

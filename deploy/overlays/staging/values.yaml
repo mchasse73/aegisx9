@@ -55,11 +55,11 @@ wif:
   # VAULT_ADDR, Vault's CA certificate and the Vault role, identity-token path and auth
   # mount (WIF_VAULT_*) all come from the aegisx9-gateway Secret.
   vaultCaSecretKey: VAULT_CACERT_PEM
+  # Key id of the public key uploaded to the federation issuer on 2026-10-22. Before the
+  # signing key rotates, upload the new public key to the issuer and add its kid here.
+  uploadedKids: ["e499d095-5727-55e0-9155-d31a96f45192"]
   jwksCheck:
     enabled: true
-    # Digest of the signing keys uploaded to the federation issuer on 2026-10-22. When the
-    # check alerts, upload the new keys to the issuer first, then update this value.
-    expectedSha256: "a6778f2941625feb28f024005c5c159466882838675831b48c0124fb0f271161"
 # NetworkPolicies, like the namespace and quota, are owned by the platform team and
 # excluded from the Argo CD AppProject; the chart must not render one here.
 networkPolicy:
