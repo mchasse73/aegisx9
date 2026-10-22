@@ -60,6 +60,8 @@ runAsNonRoot: true
 privileged: false
 capabilities:
   drop: ["ALL"]
+seccompProfile:
+  type: RuntimeDefault
 {{- end -}}
 
 {{/* Environment of the budget jobs. The admin key comes from the Secret by reference. */}}
