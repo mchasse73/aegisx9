@@ -16,15 +16,17 @@ service:
   type: ClusterIP
   port: 4000
 
-# Secret holding provider keys and the proxy master key. Created by External Secrets,
-# never by this chart. Expected keys: LITELLM_MASTER_KEY, AEGIS_PRINCIPAL_SALT and
-# provider keys referenced by gateway.models[].apiKeyEnv.
+# Secret holding provider keys and the proxy master key. Created by External Secrets
+# (see deploy/overlays/<env>/externalsecret.yaml), never by this chart. Expected keys:
+# LITELLM_MASTER_KEY, AEGIS_PRINCIPAL_SALT, JWT_PUBLIC_KEY_URL (when gateway.oidc.jwksUrl
+# is empty) and the provider keys referenced by gateway.models[].apiKeyEnv.
 existingSecret: aegisx9-gateway
 
 gateway:
   # OIDC (JWT) authentication against the identity provider.
   oidc:
     enabled: true
+    # Leave empty to take JWT_PUBLIC_KEY_URL from the Secret instead of committing it.
     jwksUrl: ""
     audience: aegisx9
     userIdClaim: sub
@@ -53,6 +55,13 @@ resources:
   limits:
     cpu: "1"
     memory: 1Gi
+
+scheduling:
+  # Never schedule the gateway on control-plane nodes. Operators may also list node
+  # hostnames the gateway must avoid (left empty in this repository; the platform team
+  # protects shared workers with taints or its own admission defaults).
+  avoidControlPlane: true
+  excludeNodeHostnames: []
 
 networkPolicy:
   enabled: true

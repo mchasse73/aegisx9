@@ -40,3 +40,5 @@ evidence/
 .git_*
 *secret*
 !**/secrets.py
+# Kubernetes ExternalSecret manifests reference the store; they carry no values.
+!deploy/overlays/*/externalsecret.yaml

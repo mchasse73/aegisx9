@@ -1,8 +1,24 @@
 replicaCount: 1
 gateway:
   oidc:
-    # Set to the identity provider's JWKS URL for the staging application.
+    # Empty on purpose: JWT_PUBLIC_KEY_URL comes from the aegisx9-gateway Secret.
     jwksUrl: ""
+  models:
+    - name: claude-sonnet
+      model: anthropic/claude-sonnet-5-5
+      apiKeyEnv: ANTHROPIC_API_KEY
+      rpm: 60
+      maxTokens: 4096
+    - name: claude-haiku
+      model: anthropic/claude-haiku-5-5
+      apiKeyEnv: ANTHROPIC_API_KEY
+      rpm: 120
+      maxTokens: 4096
+    - name: claude-opus
+      model: anthropic/claude-opus-5-5
+      apiKeyEnv: ANTHROPIC_API_KEY
+      rpm: 20
+      maxTokens: 4096
   budgets:
     defaultMaxBudgetUsd: 2
 # NetworkPolicies, like the namespace and quota, are owned by the platform team and
