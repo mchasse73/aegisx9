@@ -1,9 +1,11 @@
 {{- if and .Values.wif.enabled .Values.wif.jwksCheck.enabled }}
 {{- $fullname := include "aegisx9.fullname" . }}
-# The Anthropic federation issuer holds Vault's OIDC signing keys inline. When Vault
-# rotates them every exchange fails until the issuer is updated, so this job compares the
-# digest of Vault's public keys (unauthenticated identity/oidc/.well-known/keys) with the
-# configured one and logs an aegisx9_jwks_check line that the Loki rules alert on.
+# The Anthropic federation issuer holds the public keys that sign the gateway's identity
+# tokens inline. When the store rotates the signing key, every exchange fails until the new
+# public key is uploaded, so this job checks that every key id in wif.uploadedKids is still
+# published at the unauthenticated identity/oidc/.well-known/keys endpoint and logs an
+# aegisx9_jwks line (missing_uploaded_kids) that the Loki rules alert on. The endpoint
+# also lists unrelated keys that rotate daily, so the published set is never compared whole.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -54,8 +56,8 @@ spec:
                 - name: VAULT_CACERT
                   value: /etc/aegisx9-vault-ca/ca.crt
                 {{- end }}
-                - name: AEGISX9_JWKS_EXPECTED_SHA256
-                  value: {{ .Values.wif.jwksCheck.expectedSha256 | quote }}
+                - name: AEGISX9_WIF_UPLOADED_KIDS
+                  value: {{ join "," .Values.wif.uploadedKids | quote }}
               securityContext:
                 {{- include "aegisx9.containerSecurityContext" . | nindent 16 }}
               resources:

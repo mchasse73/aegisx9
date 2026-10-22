@@ -18,8 +18,18 @@ All notable changes to this project are documented here. The format follows
   first seconds while network policy catches up) and can set a priority class (refs #53).
 - Dependency bumps: hatchling 1.32.4, pytest 9.1.1, pytest-cov 7.1.0, ruff 0.17.1, mypy 2.4.0,
   checkov-action 12.3134.0 (supersedes Dependabot PRs #34 to #39).
-
-### Fixed
+- The gateway image starts with a database: the Prisma client (`prisma==0.11.0`, the version
+  LiteLLM 1.106.2 ships), its CLI, query and schema engines and a digest-pinned Node.js are
+  baked in at build time, the client is generated from LiteLLM's schema, and LiteLLM's
+  migrations run from `/tmp` (`LITELLM_MIGRATION_DIR`), so nothing is downloaded at runtime and
+  the read-only root filesystem holds. CI now also boots the image read-only against Postgres 17
+  and checks that the migrations were applied, and that the Prisma CLI runs with no network.
+- The signing-key check no longer alerts every day: it compared a digest of every key Vault
+  publishes, including a built-in key that rotates daily. The broker now checks the `kid` of
+  each identity token against `wif.uploadedKids` (`wif_kid_not_uploaded`), and the hourly job
+  checks that every uploaded kid is still published (`missing_uploaded_kids`). The
+  `wif.jwksCheck.expectedSha256` value and its alerts are removed; ADR 0009 describes key
+  rotation.
 - The guard callback subclasses LiteLLM's CustomLogger so the proxy loads it; CI boots the proxy
   with the real config as a smoke test; ExternalSecret defaults are explicit to avoid Argo CD
   drift (refs #8).

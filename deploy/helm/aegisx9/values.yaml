@@ -117,14 +117,17 @@ wif:
     limits:
       cpu: 100m
       memory: 128Mi
-  # Hourly check that Vault's OIDC signing keys (identity/oidc/.well-known/keys) still match
-  # the keys configured in the Anthropic federation issuer (inline JWKS).
+  # Key ids (kid) of the public keys uploaded to the Anthropic federation issuer (inline
+  # JWKS). Public identifiers, not secrets. The broker logs wif_kid_not_uploaded when an
+  # identity token is signed by any other key, and the jwks check below logs the uploaded
+  # kids that the store no longer publishes. Before the store rotates the signing key,
+  # upload the new public key to the issuer and add its kid here (ADR 0009).
+  uploadedKids: []
+  # Hourly check that every kid in uploadedKids is still published by the store
+  # (identity/oidc/.well-known/keys).
   jwksCheck:
     enabled: false
     schedule: "17 * * * *"
-    # Comma-separated SHA-256 digests (python -m aegisx9.gateway_ops check-jwks logs the
-    # current one). Public-key digests, not secrets.
-    expectedSha256: ""
 
 resources:
   requests:
