@@ -214,6 +214,81 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
 
+  workspace-image:
+    name: workspace image build + Trivy + container self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [lint-test]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: workspace
+          file: workspace/image/Dockerfile
+          load: true
+          push: false
+          tags: aegisx9-workspace:ci-${{ github.sha }}
+          # CI renders the baseline with example hosts; the release build uses the
+          # repository variables (see workspace/README.md).
+          build-args: |
+            VERSION=${{ github.sha }}
+            AEGISX9_GATEWAY_URL=https://gateway.example.test
+            AEGISX9_OTLP_ENDPOINT=https://otlp.example.test
+            AEGISX9_VAULT_ADDR=https://vault.example.test
+          cache-from: type=gha,scope=workspace
+          cache-to: type=gha,mode=max,scope=workspace
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: aegisx9-workspace:ci-${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          trivyignores: workspace/image/.trivyignore
+      - name: container self-test (locked baseline, non-root, no static key)
+        env:
+          IMG: aegisx9-workspace:ci-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          failed=0
+          run() { docker run --rm "${IMG}" "$@"; }
+          # check <name> <command...>: every check runs even after a failure, and the
+          # job fails at the end naming each one that did not pass.
+          check() {
+            local name="$1"; shift
+            if "$@"; then echo "ok   ${name}"; else echo "FAIL ${name}"; failed=1; fi
+          }
+          managed_root_0644() { [ "$(run stat -c '%U:%G %a' "$1")" = "root:root 644" ]; }
+          user_is_dev() { [ "$(run id -u)" = "1000" ] && [ "$(run id -un)" = "dev" ]; }
+          no_static_key() {
+            [ -z "$(run sh -c 'printf "%s%s" "${ANTHROPIC_API_KEY:-}" "${ANTHROPIC_AUTH_TOKEN:-}"')" ]
+          }
+
+          # The image's own self-test, then the same facts asserted from outside.
+          check selftest run /opt/aegisx9/bin/workspace-selftest
+          check managed-settings-perms managed_root_0644 /etc/claude-code/managed-settings.json
+          check managed-mcp-perms managed_root_0644 /etc/claude-code/managed-mcp.json
+          check user-dev-1000 user_is_dev
+          check no-sudo run sh -c '! command -v sudo >/dev/null 2>&1 && ! test -e /etc/sudoers && ! id -nG | grep -qw sudo'
+          check managed-settings-readonly run sh -c 'touch /etc/claude-code/managed-settings.json 2>/dev/null && exit 1 || exit 0'
+          check claude-version run claude --version
+          check no-static-key no_static_key
+          check settings-content run python3 -c 'import json; s=json.load(open("/etc/claude-code/managed-settings.json")); assert s["apiKeyHelper"]=="/opt/aegisx9/bin/gateway-token"; assert s["env"]["ANTHROPIC_BASE_URL"]=="https://gateway.example.test"; assert s["sandbox"]["enabled"] is True'
+          # Hooks work inside the image (regex-only prompt check, fail-closed paths intact).
+          check prompt-hook-allows run sh -c 'printf "%s" "{\"prompt\":\"refactor the parser\"}" | /opt/aegisx9/hooks/prompt-credential-check.sh'
+          check bash-guard-blocks run sh -c 'printf "%s" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"printenv\"}}" | /opt/aegisx9/hooks/pretooluse-guard.sh; rc=$?; [ "$rc" -eq 2 ]'
+          # Home initialisation: explicit (what the Coder startup script can call) and via a login shell.
+          check workspace-init run bash -c '. /opt/aegisx9/bin/workspace-init && test -L "$HOME/.claude/skills/handoff" && test -d "$HOME/.aegisx9/handoff"'
+          check login-shell-init run bash -lc 'test -L "$HOME/.claude/skills/handoff" && test -d "$HOME/.aegisx9/handoff"'
+          check handoff-cli run handoff --help
+          # Coder template requirements: sshd (unprivileged, started by the agent), rsync, pgrep.
+          check coder-tools run sh -c 'test -x /usr/sbin/sshd && rsync --version >/dev/null && pgrep --version >/dev/null'
+          check no-baked-host-keys run sh -c 'test ! -e /etc/ssh/ssh_host_ed25519_key'
+          [ "${failed}" -eq 0 ] || { echo "workspace image self-test FAILED (see FAIL lines above)"; exit 1; }
+          echo "workspace image self-test passed"
+
   terraform:
     name: terraform fmt, validate, tflint, Checkov
     runs-on: ubuntu-latest
