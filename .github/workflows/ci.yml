@@ -260,7 +260,7 @@ jobs:
             local name="$1"; shift
             if "$@"; then echo "ok   ${name}"; else echo "FAIL ${name}"; failed=1; fi
           }
-          managed_root_0644() { [ "$(run stat -c '%U:%G %a' "$1")" = "root:root 644"; }
+          managed_root_0644() { [ "$(run stat -c '%U:%G %a' "$1")" = "root:root 644" ]; }
           user_is_dev() { [ "$(run id -u)" = "1000" ] && [ "$(run id -un)" = "dev" ]; }
           no_static_key() {
             [ -z "$(run sh -c 'printf "%s%s" "${ANTHROPIC_API_KEY:-}" "${ANTHROPIC_AUTH_TOKEN:-}"')" ]
