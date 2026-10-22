@@ -136,17 +136,26 @@ class BudgetPlan:
 Request = Callable[[str, str, Mapping[str, str], bytes | None], tuple[int, Any]]
 
 
+def _refused_before_sending(exc: BaseException) -> bool:
+    """True only for failures that happen before any byte of the request is sent."""
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    return isinstance(reason, ConnectionRefusedError)
+
+
 def urllib_request(
     context: ssl.SSLContext | None = None,
     timeout: float = 30.0,
     connect_retry_seconds: float = 60.0,
     sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> Request:
     """HTTP helper for the day-2 jobs.
 
     A short-lived pod can be refused for its first seconds while the network policy
-    controller adds its address, so connection failures (not HTTP errors) are retried for
-    up to ``connect_retry_seconds`` before giving up.
+    controller adds its address. Only a refused connection is retried: nothing was sent, so
+    no write can be replayed. Timeouts and other failures after sending propagate. Retries
+    stop at a monotonic deadline ``connect_retry_seconds`` after the first attempt, and each
+    attempt's timeout is capped to the time left.
     """
 
     def _request(
@@ -155,10 +164,13 @@ def urllib_request(
         if urlsplit(url).scheme not in {"http", "https"}:
             raise OpsError("unsupported URL scheme")
         req = urllib.request.Request(url, data=body, method=method, headers=dict(headers))  # noqa: S310 - scheme checked above
-        waited, delay = 0.0, 2.0
+        deadline = clock() + connect_retry_seconds
+        delay = 2.0
         while True:
+            remaining = deadline - clock()
+            attempt_timeout = max(1.0, min(timeout, remaining)) if remaining > 0 else timeout
             try:
-                with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:  # noqa: S310 - scheme checked above
+                with urllib.request.urlopen(req, timeout=attempt_timeout, context=context) as resp:  # noqa: S310 - scheme checked above
                     raw = resp.read(4 * 1024 * 1024)
                     status = resp.status
                 break
@@ -166,11 +178,11 @@ def urllib_request(
                 status, raw = e.code, b""
                 e.close()
                 break
-            except (urllib.error.URLError, ConnectionError, TimeoutError):
-                if waited >= connect_retry_seconds:
+            except (urllib.error.URLError, ConnectionError) as e:
+                remaining = deadline - clock()
+                if not _refused_before_sending(e) or remaining <= 0:
                     raise
-                sleep(delay)
-                waited += delay
+                sleep(min(delay, remaining))
                 delay = min(delay * 2, 10.0)
         try:
             return status, json.loads(raw) if raw else None
