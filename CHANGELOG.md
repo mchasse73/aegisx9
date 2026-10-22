@@ -14,6 +14,10 @@ All notable changes to this project are documented here. The format follows
   check enabled (refs #53).
 
 ### Fixed
+- Day-2 jobs retry connection failures for up to 60 seconds (a new pod can be refused for its
+  first seconds while network policy catches up) and can set a priority class (refs #53).
+
+### Fixed
 - The guard callback subclasses LiteLLM's CustomLogger so the proxy loads it; CI boots the proxy
   with the real config as a smoke test; ExternalSecret defaults are explicit to avoid Argo CD
   drift (refs #8).
