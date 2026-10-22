@@ -16,10 +16,13 @@ service:
   type: ClusterIP
   port: 4000
 
-# Secret holding provider keys and the proxy master key. Created by External Secrets
+# Secret holding the proxy master key and provider settings. Created by External Secrets
 # (see deploy/overlays/<env>/externalsecret.yaml), never by this chart. Expected keys:
 # LITELLM_MASTER_KEY, AEGIS_PRINCIPAL_SALT, JWT_PUBLIC_KEY_URL (when gateway.oidc.jwksUrl
-# is empty) and the provider keys referenced by gateway.models[].apiKeyEnv.
+# is empty), DATABASE_URL (budgets and spend tracking need the proxy database), the
+# provider keys referenced by gateway.models[].apiKeyEnv and, when wif.enabled, the
+# federation and Vault settings listed under wif. With wif.enabled the Secret must NOT
+# contain ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN.
 existingSecret: aegisx9-gateway
 
 gateway:
@@ -31,6 +34,9 @@ gateway:
     audience: aegisx9
     userIdClaim: sub
     teamIdClaim: groups
+  # Each model either names the Secret key holding its provider key (apiKeyEnv) or sets
+  # wif: true, which routes it through the federation broker (Anthropic only; needs
+  # wif.enabled). A wif model never has a credential in the gateway container.
   models:
     - name: default-chat
       model: openai/gpt-4o-mini
@@ -38,8 +44,25 @@ gateway:
       rpm: 60
       maxTokens: 1024
   budgets:
-    defaultMaxBudgetUsd: 5
+    # Proxy-wide spend cap (USD) per budgetDuration, enforced by LiteLLM across all callers.
+    proxyMaxBudgetUsd: 5
     budgetDuration: 30d
+    # Per-consumer budgets: one LiteLLM team each, created and kept in sync by a PostSync
+    # Job through the admin API (python -m aegisx9.gateway_ops bootstrap-teams). The sum of
+    # maxBudgetUsd must not exceed proxyMaxBudgetUsd. Fields: teamId, alias, maxBudgetUsd,
+    # memberBudgetUsd (optional, per team member), models (allowlist), defaultModel (served
+    # for the alias "default").
+    consumers: []
+    jobs:
+      # Spend check: logs aegisx9_spend lines that the Loki rules alert on (50/80/100 %).
+      spendCheckSchedule: "*/15 * * * *"
+      resources:
+        requests:
+          cpu: 10m
+          memory: 64Mi
+        limits:
+          cpu: 200m
+          memory: 128Mi
   guards:
     # Loaded from the image by the LiteLLM proxy.
     callback: aegisx9.litellm_hooks.aegis_guard
@@ -47,6 +70,52 @@ gateway:
     enabled: true
     endpoint: http://otel-collector.observability.svc:4318
     serviceName: aegisx9-gateway
+
+# Anthropic Workload Identity Federation (ADR 0009). When enabled, a broker sidecar (same
+# image) logs in to Vault with the pod's service-account token (Kubernetes auth), fetches a
+# fresh Vault-signed OIDC identity token before every Anthropic token exchange, and serves
+# a loopback-only proxy that wif models use as their api_base. The federation identifiers
+# come from existingSecret keys ANTHROPIC_FEDERATION_RULE_ID, ANTHROPIC_ORGANIZATION_ID,
+# ANTHROPIC_SERVICE_ACCOUNT_ID and (optional) ANTHROPIC_WORKSPACE_ID: identifiers, not
+# credentials, but they stay out of Git.
+wif:
+  enabled: false
+  # Vault address. Empty = read from existingSecret key VAULT_ADDR (preferred).
+  vaultAddr: ""
+  # Vault Kubernetes-auth role the broker logs in with, the identity-token endpoint it
+  # reads (identity/oidc/token/<role>) and the Kubernetes auth mount path. Empty = read from
+  # existingSecret keys WIF_VAULT_ROLE, WIF_VAULT_TOKEN_PATH and WIF_VAULT_AUTH_PATH
+  # (preferred: they describe internal infrastructure and stay out of Git).
+  vaultRole: ""
+  vaultTokenPath: ""
+  vaultAuthPath: ""
+  # Audience of the projected token sent to Vault; set it to the auth role's audience.
+  # Empty = the cluster's default API audience.
+  vaultAudience: ""
+  vaultTokenExpirationSeconds: 600
+  # existingSecret key holding Vault's CA certificate (PEM). It is mounted as a file and
+  # TLS to Vault is always verified against it. Empty = system trust store. Vault must be
+  # reached over its TLS listener only.
+  vaultCaSecretKey: ""
+  port: 8787
+  upstream: https://api.anthropic.com
+  # Fraction of the access token's lifetime after which it is refreshed.
+  refreshFraction: "0.8"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+  # Hourly check that Vault's OIDC signing keys (identity/oidc/.well-known/keys) still match
+  # the keys configured in the Anthropic federation issuer (inline JWKS).
+  jwksCheck:
+    enabled: false
+    schedule: "17 * * * *"
+    # Comma-separated SHA-256 digests (python -m aegisx9.gateway_ops check-jwks logs the
+    # current one). Public-key digests, not secrets.
+    expectedSha256: ""
 
 resources:
   requests:
@@ -75,6 +144,10 @@ networkPolicy:
     - 10.0.0.0/8
     - 172.16.0.0/12
     - 192.168.0.0/16
+  # Namespace and TLS port of Vault, for the federation broker and the JWKS check.
+  # Empty namespace = no rule.
+  vaultNamespace: ""
+  vaultPort: 8300
 
 podDisruptionBudget:
   enabled: false

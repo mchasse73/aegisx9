@@ -7,7 +7,7 @@ gateway:
     # Set to the identity provider's JWKS URL for the production application.
     jwksUrl: ""
   budgets:
-    defaultMaxBudgetUsd: 20
+    proxyMaxBudgetUsd: 20
 affinity:
   podAntiAffinity:
     preferredDuringSchedulingIgnoredDuringExecution:

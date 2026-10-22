@@ -1,0 +1,110 @@
+{{- if .Values.gateway.budgets.consumers }}
+{{- $allocated := 0.0 }}
+{{- range .Values.gateway.budgets.consumers }}
+{{- $allocated = addf $allocated .maxBudgetUsd }}
+{{- end }}
+{{- if gt $allocated (float64 .Values.gateway.budgets.proxyMaxBudgetUsd) }}
+{{- fail "gateway.budgets.consumers allocate more than proxyMaxBudgetUsd" }}
+{{- end }}
+{{- $fullname := include "aegisx9.fullname" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ $fullname }}-budgets
+  labels:
+    {{- include "aegisx9.labels" . | nindent 4 }}
+data:
+  plan.json: |
+    {{- dict "proxyMaxBudgetUsd" .Values.gateway.budgets.proxyMaxBudgetUsd "budgetDuration" .Values.gateway.budgets.budgetDuration "consumers" .Values.gateway.budgets.consumers | toPrettyJson | nindent 4 }}
+---
+# Creates or updates one LiteLLM team per consumer after every sync. Idempotent.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ $fullname }}-budget-bootstrap
+  labels:
+    {{- include "aegisx9.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 4
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "aegisx9.opsSelectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "aegisx9.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "aegisx9.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: bootstrap-teams
+          image: {{ include "aegisx9.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "aegisx9.gateway_ops", "bootstrap-teams"]
+          {{- include "aegisx9.opsJobEnv" . | nindent 10 }}
+          securityContext:
+            {{- include "aegisx9.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.gateway.budgets.jobs.resources | nindent 12 }}
+          volumeMounts:
+            - name: budgets
+              mountPath: /etc/aegisx9-budgets
+              readOnly: true
+      volumes:
+        - name: budgets
+          configMap:
+            name: {{ $fullname }}-budgets
+---
+# Logs proxy and per-consumer spend for the Loki budget alerts (50/80/100 %).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ $fullname }}-spend-check
+  labels:
+    {{- include "aegisx9.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.gateway.budgets.jobs.spendCheckSchedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "aegisx9.opsSelectorLabels" . | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "aegisx9.serviceAccountName" . }}
+          automountServiceAccountToken: false
+          securityContext:
+            {{- include "aegisx9.podSecurityContext" . | nindent 12 }}
+          containers:
+            - name: check-spend
+              image: {{ include "aegisx9.image" . | quote }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["python", "-m", "aegisx9.gateway_ops", "check-spend"]
+              {{- include "aegisx9.opsJobEnv" . | nindent 14 }}
+              securityContext:
+                {{- include "aegisx9.containerSecurityContext" . | nindent 16 }}
+              resources:
+                {{- toYaml .Values.gateway.budgets.jobs.resources | nindent 16 }}
+              volumeMounts:
+                - name: budgets
+                  mountPath: /etc/aegisx9-budgets
+                  readOnly: true
+          volumes:
+            - name: budgets
+              configMap:
+                name: {{ $fullname }}-budgets
+{{- end }}

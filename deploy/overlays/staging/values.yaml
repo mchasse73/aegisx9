@@ -3,24 +3,58 @@ gateway:
   oidc:
     # Empty on purpose: JWT_PUBLIC_KEY_URL comes from the aegisx9-gateway Secret.
     jwksUrl: ""
+  # Anthropic through Workload Identity Federation only (ADR 0009): no static key exists.
+  # Global inference (no inference_geo).
   models:
-    - name: claude-sonnet
-      model: anthropic/claude-sonnet-5-5
-      apiKeyEnv: ANTHROPIC_API_KEY
+    - name: claude-haiku-5-5
+      model: anthropic/claude-haiku-5-5
+      wif: true
       rpm: 60
       maxTokens: 4096
-    - name: claude-haiku
-      model: anthropic/claude-haiku-5-5
-      apiKeyEnv: ANTHROPIC_API_KEY
-      rpm: 120
-      maxTokens: 4096
-    - name: claude-opus
+    - name: claude-sonnet-5-5
+      model: anthropic/claude-sonnet-5-5
+      wif: true
+      rpm: 30
+      maxTokens: 8192
+    - name: claude-opus-5-5
       model: anthropic/claude-opus-5-5
-      apiKeyEnv: ANTHROPIC_API_KEY
-      rpm: 20
-      maxTokens: 4096
+      wif: true
+      rpm: 10
+      maxTokens: 8192
   budgets:
-    defaultMaxBudgetUsd: 2
+    # The owner's Anthropic credits are $200/month; the gateway stops at $180 per 30 days.
+    proxyMaxBudgetUsd: 180
+    budgetDuration: 30d
+    # $20 + $30 + $50 allocated; the remaining $80 is deliberately unallocated headroom.
+    consumers:
+      - teamId: public-chat
+        alias: Public chat
+        maxBudgetUsd: 20
+        models: [claude-haiku-5-5]
+        defaultModel: claude-haiku-5-5
+      - teamId: staging-tests
+        alias: Staging tests and red-team
+        maxBudgetUsd: 30
+        models: [claude-haiku-5-5, claude-sonnet-5-5]
+        defaultModel: claude-haiku-5-5
+      # $25 per developer; the team cap covers two developers. Raise it (within the
+      # unallocated headroom) when a developer joins. Opus is served only when a developer
+      # asks for it by name; "default" resolves to Sonnet.
+      - teamId: developers
+        alias: Developers
+        maxBudgetUsd: 50
+        memberBudgetUsd: 25
+        models: [claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5]
+        defaultModel: claude-sonnet-5-5
+wif:
+  enabled: true
+  # VAULT_ADDR, Vault's CA certificate and the Vault role, identity-token path and auth
+  # mount (WIF_VAULT_*) all come from the aegisx9-gateway Secret.
+  vaultCaSecretKey: VAULT_CACERT_PEM
+  jwksCheck:
+    enabled: true
+    # Filled in after the federation issuer is created (the check logs the current digest).
+    expectedSha256: ""
 # NetworkPolicies, like the namespace and quota, are owned by the platform team and
 # excluded from the Argo CD AppProject; the chart must not render one here.
 networkPolicy:
