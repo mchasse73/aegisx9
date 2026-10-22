@@ -1,0 +1,35 @@
+# AegisX9 external vantage: fetch the scanner's secrets from the AWS SSM Parameter Store
+# (SecureString, decrypted with the instance role) into 0600 root-owned files, and write
+# the non-secret /etc/aegisx9-scanner/env. Runs as root once per boot, before any scan
+# unit; the scan units read the secret files only through systemd LoadCredential=.
+# Settings (parameter NAMES, addresses, region) come from
+# /etc/aegisx9-scanner/env-source.conf, written by cloud-init or the automation role.
+[Unit]
+Description=AegisX9 scanner: fetch secrets from SSM Parameter Store into 0600 files
+Documentation=https://github.com/mchasse73/aegisx9/tree/main/scanner
+After=network-online.target
+Wants=network-online.target
+Before=aegisx9-scan-daily.service aegisx9-scan-uptime.service aegisx9-scan-redteam.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/aegisx9-scanner-env
+UMask=0077
+# Needs root to write under /etc; everything else is locked down.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/aegisx9-scanner
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

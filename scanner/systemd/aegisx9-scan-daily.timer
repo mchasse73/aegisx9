@@ -1,0 +1,13 @@
+# AegisX9 external vantage: daily scan at 08:00 America/New_York.
+[Unit]
+Description=Run the AegisX9 daily exposure scan
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 America/New_York
+Persistent=true
+RandomizedDelaySec=5min
+AccuracySec=1min
+Unit=aegisx9-scan-daily.service
+
+[Install]
+WantedBy=timers.target

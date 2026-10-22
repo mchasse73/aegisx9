@@ -42,6 +42,14 @@ All notable changes to this project are documented here. The format follows
   `handoff-sync` (gitleaks-gated, append-only union sync back to the central workspace with
   manifest verification, shred and token revoke), EDA rules and the `breakglass` role with
   ledger and window-expiry job templates (refs #52).
+- External vantage scanner (`scanner/`, console script `aegisx9-scan`): daily port, TLS,
+  exposure-file, nuclei and DNS checks from a cloud host outside every allow-list,
+  diffed against the approved-exposure registry and the previous snapshot; five-minute
+  uptime checks; weekly external red-team run; dated clean reports; HMAC-signed webhook
+  to Event-Driven Ansible and SES email; a never-target deny list enforced before any
+  scan. With hardened systemd units, Terraform for the host (`infra/scanner/`), an
+  Ansible deploy role and an EDA rule that opens an incident on `exposure_change`
+  (refs #42).
 - `.gitignore` refuses credential-shaped files in the working tree (refs #33).
 - Project onboarded into the maintainer environment: repo remote, tracking issue, docs
   collection and memory (refs #33).

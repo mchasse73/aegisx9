@@ -1,0 +1,11 @@
+# AegisX9 external vantage: uptime probe every 5 minutes.
+[Unit]
+Description=Run the AegisX9 uptime probe every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+AccuracySec=30s
+Unit=aegisx9-scan-uptime.service
+
+[Install]
+WantedBy=timers.target

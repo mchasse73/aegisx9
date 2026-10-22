@@ -1,0 +1,30 @@
+---
+- name: Validate the event fields from the scanner webhook
+  ansible.builtin.assert:
+    that:
+      - exposure_change_summary | length > 0
+      - exposure_change_run_id is match('^[A-Za-z0-9._:-]{1,64}$')
+      - exposure_change_reason in ['external exposure change', 'public endpoint down', 'external red-team regression']
+    fail_msg: exposure_change_summary must be set, exposure_change_run_id must be a plain id and exposure_change_reason one of the known kinds
+    quiet: true
+
+- name: Open an incident record
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ exposure_change_repository }}/issues"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.env', 'AEGISX9_GITHUB_TOKEN') }}"
+      Accept: application/vnd.github+json
+    body_format: json
+    body:
+      title: "[external-vantage] {{ exposure_change_reason }}: {{ exposure_change_summary }}"
+      body: |
+        Source: AegisX9 external vantage scanner (signed webhook, verified by Event-Driven Ansible).
+        Reason: {{ exposure_change_reason }}
+        Run id: {{ exposure_change_run_id }}
+        Report on the scanner host: {{ exposure_change_report_path }}
+        Next steps: open the report over SSM Session Manager, confirm the exposure against the
+        approved registry, then either register it (with authorisation) or close the hole.
+      labels: [incident, area/external-vantage]
+    status_code: 201
+  no_log: true

@@ -1,0 +1,8 @@
+---
+# Event-Driven Ansible response to the scanner's "exposure_change", "down" and
+# "redteam_regression" webhook events: open an incident record.
+- name: Open an incident for an external exposure change (EDA response)
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: x9.aegisx9.exposure_change

@@ -100,6 +100,7 @@ Work is tracked in GitHub Issues, Milestones and a Projects board.
 | `infra/` | Terraform roots (`staging`, `prod`) run in Terraform Enterprise: namespaces, quotas, Vault (KV, transit, PKI), identity-provider app, GitHub settings, Route 53 |
 | `automation/`, `extensions/eda/` | Ansible collection and playbooks for Ansible Automation Platform; Event-Driven Ansible rulebooks |
 | `redteam/` | promptfoo and garak suites run against staging |
+| `scanner/`, `infra/scanner/` | External vantage: daily exposure, TLS, DNS and uptime checks of the public surface from a cloud host, diffed against the approved-exposure registry; the host's Terraform and hardened systemd units (see `scanner/README.md`) |
 | `docs/adr/` | Architecture decision records |
 
 ## Local development

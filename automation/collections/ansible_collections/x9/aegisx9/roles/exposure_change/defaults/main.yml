@@ -1,0 +1,7 @@
+---
+# Set by the Event-Driven Ansible rule from the scanner's signed webhook payload.
+exposure_change_reason: external exposure change
+exposure_change_run_id: ""
+exposure_change_summary: ""
+exposure_change_report_path: ""
+exposure_change_repository: mchasse73/aegisx9-incidents
