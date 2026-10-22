@@ -104,6 +104,8 @@ resource "aws_iam_role" "scanner" {
 # carries only what the SSM agent needs for Session Manager.
 data "aws_iam_policy_document" "scanner" {
   # checkov:skip=CKV_AWS_355:the SSM agent and Session Manager actions below do not support resource-level permissions
+  # checkov:skip=CKV_AWS_356:the SSM agent and Session Manager actions below do not support resource-level permissions
+  # checkov:skip=CKV_AWS_111:only ssm:UpdateInstanceInformation and the Session Manager channel actions are unconstrained; AWS offers no resource scope for them
   # checkov:skip=CKV_AWS_290:ssm:UpdateInstanceInformation is the agent heartbeat; it has no resource constraint
   statement {
     sid = "SessionManagerAgent"
