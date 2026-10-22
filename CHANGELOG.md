@@ -50,6 +50,19 @@ All notable changes to this project are documented here. The format follows
   scan. With hardened systemd units, Terraform for the host (`infra/scanner/`), an
   Ansible deploy role and an EDA rule that opens an incident on `exposure_change`
   (refs #42).
+- Developer workspace image (`workspace/`): signed, digest-pinned devcontainer with the
+  locked Claude Code baseline as root-owned managed settings (gateway-only routing,
+  `apiKeyHelper`, model allowlist, bypass disabled, secret-path denies, Bash sandbox with
+  a network allowlist, exclusive managed MCP list, fail-closed hooks, telemetry without
+  prompt text); CI builds and self-tests it, the release pipeline publishes it to
+  `ghcr.io/mchasse73/aegisx9/workspace` with SBOM, Trivy scan and keyless signature
+  (refs #48).
+- `gateway-token` apiKeyHelper: Vault OIDC login for role `aegisx9-developer` and a
+  short-lived gateway JWT from Vault's identity OIDC provider, cached in 0600 files, no
+  static key anywhere (refs #49).
+- Session memory and daily handoff: `handoff` CLI, `/handoff` skill, a `SessionEnd`
+  hook that writes a stub note, team-memory publish, and documented home/team-memory
+  mounts; every note is scanned with the same secret patterns as prompts (refs #51).
 - `.gitignore` refuses credential-shaped files in the working tree (refs #33).
 - Project onboarded into the maintainer environment: repo remote, tracking issue, docs
   collection and memory (refs #33).

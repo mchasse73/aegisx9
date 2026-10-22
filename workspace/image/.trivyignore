@@ -1,0 +1,16 @@
+# Trivy ignore list for the workspace image (CRITICAL/HIGH, fixed-only gate in CI).
+# Every entry: the affected component, why it cannot be fixed here, and when it is
+# re-evaluated. Re-evaluate on the next Dependabot bump of the base image or of the tool
+# versions in the Dockerfile; drop an entry as soon as an upstream release carries the fix.
+
+# 2026-10-21: usr/local/bin/vault (gobinary), Go crypto/x509. Vault 2.2.0 is the latest
+# upstream release and ships with the vulnerable Go standard library; the CLI only talks
+# to the company's Vault over TLS it already trusts. Re-evaluate at the next Vault release.
+CVE-2026-111943
+
+# 2026-10-21: Node.js bundled npm packages (node-pkg) in the upstream Node 24.22.1 LTS
+# tarball, which is the latest release. npm is used at build time only (Claude Code
+# install) and is not on the request path. Re-evaluate at the next Node 24 LTS release.
+CVE-2026-102276
+CVE-2026-102278
+CVE-2026-19534

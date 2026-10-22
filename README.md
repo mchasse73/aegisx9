@@ -101,7 +101,15 @@ Work is tracked in GitHub Issues, Milestones and a Projects board.
 | `automation/`, `extensions/eda/` | Ansible collection and playbooks for Ansible Automation Platform; Event-Driven Ansible rulebooks |
 | `redteam/` | promptfoo and garak suites run against staging |
 | `scanner/`, `infra/scanner/` | External vantage: daily exposure, TLS, DNS and uptime checks of the public surface from a cloud host, diffed against the approved-exposure registry; the host's Terraform and hardened systemd units (see `scanner/README.md`) |
+| `workspace/` | Signed developer workspace image with the locked Claude Code baseline, hooks, `apiKeyHelper` and handoff tooling |
 | `docs/adr/` | Architecture decision records |
+
+## Developer workspaces
+
+Developers use centralised workspaces (one signed, digest-pinned image per pod) in
+which Claude Code runs under a locked, root-owned policy baseline: gateway-only
+routing, a Vault-issued short-lived token instead of any static key, a Bash sandbox,
+fail-closed hooks and a daily handoff routine. See [workspace/README.md](workspace/README.md).
 
 ## Local development
 
