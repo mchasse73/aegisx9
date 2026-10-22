@@ -5,6 +5,10 @@
 # protected environments with required reviewers. Never add a pull_request trigger.
 # Pull requests get fmt/validate/tflint/Checkov/Sentinel tests on GitHub-hosted runners
 # (ci.yml) instead. See SECURITY.md "CI runner policy".
+#
+# Gated by the repository variable INFRA_APPLY_ENABLED: it stays unset until the Terraform
+# Enterprise workspaces and their team token exist (#17), so pushes don't queue jobs that
+# cannot reach TFE or authenticate to it.
 name: infra-apply
 
 on:
@@ -29,6 +33,7 @@ jobs:
       github.repository == 'mchasse73/aegisx9'
       && github.ref == 'refs/heads/main'
       && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && vars.INFRA_APPLY_ENABLED == 'true'
     runs-on: aegisx9-arc
     environment: staging
     timeout-minutes: 30
