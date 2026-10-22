@@ -1,0 +1,51 @@
+# AegisX9 external vantage: HTTP reachability and latency for the public endpoints.
+# Exit status 1 = an endpoint is DOWN (unit marked failed, alert sent). Exit 2 = config error.
+[Unit]
+Description=AegisX9 external vantage uptime probe
+Documentation=https://github.com/mchasse73/aegisx9/tree/main/scanner
+After=network-online.target aegisx9-scanner-env.service
+Wants=network-online.target
+Requires=aegisx9-scanner-env.service
+
+[Service]
+Type=oneshot
+# Plain HTTP(S) probes: no capabilities, throwaway user. DynamicUser cannot share the
+# static user's StateDirectory (it would want /var/lib/private + a symlink), so the
+# state and log directories are opened through ReadWritePaths with the scanner group
+# (directories are 0770 aegisx9-scanner:aegisx9-scanner, see the tmpfiles file).
+DynamicUser=yes
+Group=aegisx9-scanner
+CapabilityBoundingSet=
+EnvironmentFile=/etc/aegisx9-scanner/env
+LoadCredential=webhook_secret:/etc/aegisx9-scanner/webhook_secret
+Environment=AEGISX9_SCANNER_WEBHOOK_SECRET_FILE=%d/webhook_secret
+ExecStart=/opt/aegisx9-scanner/venv/bin/aegisx9-scan --config /etc/aegisx9-scanner --state /var/lib/aegisx9-scanner uptime
+TimeoutStartSec=2min
+ReadWritePaths=/var/lib/aegisx9-scanner /var/log/aegisx9-scanner
+WorkingDirectory=/var/lib/aegisx9-scanner
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+ReadOnlyPaths=/etc/aegisx9-scanner
+UMask=0007

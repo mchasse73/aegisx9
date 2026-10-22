@@ -13,24 +13,36 @@ authors = [{ name = "Michael Chasse" }]
 dependencies = []
 
 [project.optional-dependencies]
+# The external vantage scanner (scanner/aegisx9_scanner): `pip install 'aegisx9[scanner]'`.
+scanner = [
+  "pyyaml==6.0.3",
+  "defusedxml==0.7.1",
+]
 dev = [
   "pytest==8.4.2",
   "pytest-cov==7.0.0",
   "ruff==0.14.1",
   "mypy==1.18.2",
+  "pyyaml==6.0.3",
+  "defusedxml==0.7.1",
+  "types-PyYAML==6.0.12.20250915",
+  "types-defusedxml==0.7.0.20250822",
 ]
+
+[project.scripts]
+aegisx9-scan = "aegisx9_scanner.cli:main"
 
 [tool.hatch.version]
 path = "VERSION"
 pattern = "(?P<version>.+)"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/aegisx9"]
+packages = ["src/aegisx9", "scanner/aegisx9_scanner"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests"]
+src = ["src", "scanner", "tests"]
 # Break-glass tools are Python scripts without a .py suffix; lint and format them too.
 extend-include = ["workspace/breakglass/bin/handoff-sync", "workspace/breakglass/bin/aegisx9-event"]
 
@@ -43,10 +55,11 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "C4", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-mypy_path = "src:scripts/ci"
+mypy_path = "src:scripts/ci:scanner"
 files = [
   "src/aegisx9",
   "scripts/ci",
+  "scanner/aegisx9_scanner",
   "workspace/breakglass/bin/handoff-sync",
   "workspace/breakglass/bin/aegisx9-event",
 ]
@@ -54,8 +67,8 @@ scripts_are_modules = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --cov=aegisx9 --cov-report=term-missing --cov-fail-under=85"
+addopts = "-q --cov=aegisx9 --cov=aegisx9_scanner --cov-report=term-missing --cov-fail-under=85"
 
 [tool.coverage.run]
 branch = true
-source = ["aegisx9"]
+source = ["aegisx9", "aegisx9_scanner"]

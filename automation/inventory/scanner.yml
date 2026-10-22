@@ -1,0 +1,16 @@
+---
+# The external vantage scanner host, reached through AWS Systems Manager Session Manager
+# (community.aws.aws_ssm connection plugin). No SSH: the host has no inbound rules.
+# The instance id and the S3 bucket the plugin uses for file transfer are injected by
+# the automation controller as environment variables; nothing real is stored here.
+all:
+  children:
+    aegisx9_scanner:
+      hosts:
+        aegisx9-scanner:
+          ansible_host: "{{ lookup('ansible.builtin.env', 'AEGISX9_SCANNER_INSTANCE_ID') }}"
+      vars:
+        ansible_connection: community.aws.aws_ssm
+        ansible_aws_ssm_region: "{{ lookup('ansible.builtin.env', 'AEGISX9_SCANNER_AWS_REGION', default='us-east-1') }}"
+        ansible_aws_ssm_bucket_name: "{{ lookup('ansible.builtin.env', 'AEGISX9_SSM_BUCKET') }}"
+        ansible_python_interpreter: /usr/bin/python3

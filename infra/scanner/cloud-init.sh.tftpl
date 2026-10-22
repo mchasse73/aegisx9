@@ -1,0 +1,151 @@
+#!/bin/bash
+# AegisX9 external vantage host bootstrap (rendered by Terraform templatefile()).
+# This file receives parameter NAMES and non-secret settings only. Secret values are
+# fetched at every boot by aegisx9-scanner-env.service from the SSM Parameter Store
+# into 0600 root-owned files. Never add `set -x`.
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+exec > >(tee -a /var/log/aegisx9-scanner-bootstrap.log) 2>&1
+echo "aegisx9-scanner bootstrap start: $(date -u +%FT%TZ)"
+
+PKG_REF='${scanner_package_ref}'
+NUCLEI_VERSION='${nuclei_version}'
+RAW_BASE="https://raw.githubusercontent.com/mchasse73/aegisx9/$${PKG_REF}/scanner/systemd"
+
+# ---------------------------------------------------------------------------
+# 1. Packages
+# ---------------------------------------------------------------------------
+apt-get update -y
+apt-get upgrade -y
+apt-get install -y --no-install-recommends \
+  nmap python3-venv python3-pip dnsutils ca-certificates curl unzip jq git \
+  ufw unattended-upgrades chrony nodejs npm
+if ! command -v aws >/dev/null 2>&1; then
+  apt-get install -y --no-install-recommends awscli
+fi
+# amazon-ssm-agent ships as a snap on Ubuntu 24.04 cloud images; make sure it runs.
+snap start amazon-ssm-agent 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 2. Host baseline (brief): deny all inbound, auto-patch, sane sysctl, timezone
+# ---------------------------------------------------------------------------
+ufw default deny incoming
+ufw default allow outgoing
+ufw --force enable
+cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+EOF
+cat > /etc/sysctl.d/99-aegisx9-scanner.conf <<'EOF'
+net.ipv4.tcp_syncookies = 1
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+kernel.randomize_va_space = 2
+fs.suid_dumpable = 0
+EOF
+sysctl -p /etc/sysctl.d/99-aegisx9-scanner.conf
+timedatectl set-timezone America/New_York
+systemctl enable --now chrony
+
+# ---------------------------------------------------------------------------
+# 3. nuclei, pinned and checksum-verified
+# ---------------------------------------------------------------------------
+tmp="$(mktemp -d)"
+base="https://github.com/projectdiscovery/nuclei/releases/download/v$${NUCLEI_VERSION}"
+zip="nuclei_$${NUCLEI_VERSION}_linux_amd64.zip"
+curl -fsSLo "$${tmp}/$${zip}" "$${base}/$${zip}"
+curl -fsSLo "$${tmp}/checksums.txt" "$${base}/nuclei_$${NUCLEI_VERSION}_checksums.txt"
+(cd "$${tmp}" && grep " $${zip}$" checksums.txt | sha256sum -c -)
+unzip -q "$${tmp}/$${zip}" -d "$${tmp}/bin"
+install -m 0755 "$${tmp}/bin/nuclei" /usr/local/bin/nuclei
+rm -rf "$${tmp}"
+
+# ---------------------------------------------------------------------------
+# 4. Service account, directories, scanner package
+# ---------------------------------------------------------------------------
+curl -fsSLo /usr/lib/sysusers.d/aegisx9-scanner.conf "$${RAW_BASE}/aegisx9-scanner.sysusers.conf"
+curl -fsSLo /usr/lib/tmpfiles.d/aegisx9-scanner.conf "$${RAW_BASE}/aegisx9-scanner.tmpfiles.conf"
+systemd-sysusers
+systemd-tmpfiles --create
+
+python3 -m venv /opt/aegisx9-scanner/venv
+/opt/aegisx9-scanner/venv/bin/pip install --quiet --upgrade pip
+/opt/aegisx9-scanner/venv/bin/pip install --quiet \
+  "git+https://github.com/mchasse73/aegisx9@$${PKG_REF}#egg=aegisx9[scanner]" \
+  "garak==0.17.1"
+
+# Red-team suites (promptfoo + garak configs) from the same pinned ref, used by the
+# weekly redteam unit (AEGISX9_SCANNER_REDTEAM_SUITE_DIR). promptfoo runs via npx.
+rt="$(mktemp -d)"
+curl -fsSL "https://github.com/mchasse73/aegisx9/archive/refs/tags/$${PKG_REF}.tar.gz" \
+  | tar -xz -C "$${rt}" --strip-components=1 --wildcards '*/redteam/*'
+rm -rf /opt/aegisx9-scanner/redteam
+install -d -m 0755 /opt/aegisx9-scanner/redteam
+cp -R "$${rt}/redteam/." /opt/aegisx9-scanner/redteam/
+chown -R root:root /opt/aegisx9-scanner/redteam
+find /opt/aegisx9-scanner/redteam -type d -exec chmod 0755 {} +
+find /opt/aegisx9-scanner/redteam -type f -exec chmod 0644 {} +
+rm -rf "$${rt}"
+
+# nuclei templates live in the service user's state directory (the units are read-only
+# elsewhere); refreshed by the daily unit before each run.
+sudo -u aegisx9-scanner HOME=/var/lib/aegisx9-scanner \
+  /usr/local/bin/nuclei -update-templates -silent || true
+
+# ---------------------------------------------------------------------------
+# 5. Configuration placeholders (replaced by the automation role from the platform
+#    operations repository; never real values here)
+# ---------------------------------------------------------------------------
+install -d -m 0755 /etc/aegisx9-scanner
+for f in targets.yml never_target.yml approved_public.yml; do
+  if [ ! -e "/etc/aegisx9-scanner/$${f}" ]; then
+    printf '# Placeholder written by cloud-init; replaced by the automation role from the\n# platform operations repository.\n' > "/etc/aegisx9-scanner/$${f}"
+    chmod 0644 "/etc/aegisx9-scanner/$${f}"
+  fi
+done
+
+# Non-secret settings for the boot-time secrets fetcher (parameter NAMES only).
+umask 077
+cat > /etc/aegisx9-scanner/env-source.conf <<EOF
+AWS_REGION='${aws_region}'
+WEBHOOK_URL_PARAMETER='${webhook_url_parameter}'
+WEBHOOK_SECRET_PARAMETER='${webhook_secret_parameter}'
+TUNNEL_SECRET_PARAMETER='${tunnel_secret_parameter}'
+REDTEAM_KEY_PARAMETER='${redteam_key_parameter}'
+SES_FROM='${report_from_email}'
+SES_TO='${report_email}'
+REDTEAM_TARGET_URL='${redteam_target_url}'
+REDTEAM_MODEL='${redteam_model}'
+ALERT_MIN_SEVERITY='${alert_min_severity}'
+VAULT_AWS_AUTH_ENABLED='${vault_aws_auth_enabled}'
+VAULT_ADDR='${vault_address}'
+VAULT_AUTH_ROLE='${vault_auth_role}'
+EOF
+chmod 0600 /etc/aegisx9-scanner/env-source.conf
+umask 022
+
+# ---------------------------------------------------------------------------
+# 6. systemd units from the same pinned ref, then the secrets fetcher and timers
+# ---------------------------------------------------------------------------
+curl -fsSLo /usr/local/sbin/aegisx9-scanner-env "$${RAW_BASE}/aegisx9-scanner-env"
+chmod 0700 /usr/local/sbin/aegisx9-scanner-env
+for u in aegisx9-scanner-env.service \
+         aegisx9-scan-daily.service aegisx9-scan-daily.timer \
+         aegisx9-scan-uptime.service aegisx9-scan-uptime.timer \
+         aegisx9-scan-redteam.service aegisx9-scan-redteam.timer; do
+  curl -fsSLo "/etc/systemd/system/$${u}" "$${RAW_BASE}/$${u}"
+  chmod 0644 "/etc/systemd/system/$${u}"
+done
+systemctl daemon-reload
+systemctl enable --now aegisx9-scanner-env.service
+systemctl enable --now aegisx9-scan-daily.timer aegisx9-scan-uptime.timer aegisx9-scan-redteam.timer
+
+# TODO(platform operations): install the outbound tunnel agent that lets the internal
+# network read /var/lib/aegisx9-scanner reports. Its credential is already fetched to
+# /etc/aegisx9-scanner/tunnel_secret (0600 root) by aegisx9-scanner-env.service; the
+# agent must read it from that file, never from an argument.
+
+echo "aegisx9-scanner bootstrap done: $(date -u +%FT%TZ)"

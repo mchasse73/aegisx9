@@ -96,3 +96,87 @@
               breakglass_files: "{{ event.payload.files | default(0) }}"
               breakglass_bytes: "{{ event.payload.bytes | default(0) }}"
               breakglass_revoked: "{{ event.payload.revoked | default(false) }}"
+
+# External vantage scanner events (scanner/ in this repository). The scanner POSTs a
+# JSON body signed with HMAC-SHA256 in `X-AegisX9-Signature: sha256=<hex>`; the webhook
+# source verifies the signature before any rule sees the event. SCANNER_WEBHOOK_SECRET is
+# injected by the automation controller as an EDA credential/variable, never a literal.
+- name: AegisX9 external vantage events
+  hosts: all
+  sources:
+    - name: Scanner webhook
+      ansible.eda.webhook:
+        host: 0.0.0.0
+        port: 5002
+        hmac_secret: "{{ SCANNER_WEBHOOK_SECRET }}"
+        hmac_algo: sha256
+        hmac_header: X-AegisX9-Signature
+        hmac_format: hex
+        hmac_signature_prefix: "sha256="
+  rules:
+    - name: Exposure change observed from the internet
+      condition: >-
+        event.payload.source == "aegisx9-scanner"
+        and event.payload.event == "exposure_change"
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.payload.event
+      action:
+        run_job_template:
+          name: "AegisX9 - Exposure change"
+          organization: AegisX9
+          job_args:
+            extra_vars:
+              exposure_change_reason: external exposure change
+              exposure_change_run_id: "{{ event.payload.run_id }}"
+              exposure_change_summary: "{{ event.payload.summary }}"
+              exposure_change_report_path: "{{ event.payload.report_path }}"
+
+    - name: Public endpoint down
+      condition: >-
+        event.payload.source == "aegisx9-scanner"
+        and event.payload.event == "down"
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.payload.event
+      action:
+        run_job_template:
+          name: "AegisX9 - Exposure change"
+          organization: AegisX9
+          job_args:
+            extra_vars:
+              exposure_change_reason: public endpoint down
+              exposure_change_run_id: "{{ event.payload.run_id }}"
+              exposure_change_summary: "{{ event.payload.summary }}"
+              exposure_change_report_path: "{{ event.payload.report_path }}"
+
+    - name: External red-team regression
+      condition: >-
+        event.payload.source == "aegisx9-scanner"
+        and event.payload.event == "redteam_regression"
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.payload.event
+      action:
+        run_job_template:
+          name: "AegisX9 - Exposure change"
+          organization: AegisX9
+          job_args:
+            extra_vars:
+              exposure_change_reason: external red-team regression
+              exposure_change_run_id: "{{ event.payload.run_id }}"
+              exposure_change_summary: "{{ event.payload.summary }}"
+              exposure_change_report_path: "{{ event.payload.report_path }}"
+
+    # A clean run is recorded in the activation log (the evidence that the vantage
+    # looked and found nothing new); nothing to do.
+    - name: Clean scan recorded
+      condition: >-
+        event.payload.source == "aegisx9-scanner"
+        and event.payload.event == "clean"
+      action:
+        debug:
+          msg: "external vantage clean: run {{ event.payload.run_id }} ({{ event.payload.mode }}): {{ event.payload.summary }}"

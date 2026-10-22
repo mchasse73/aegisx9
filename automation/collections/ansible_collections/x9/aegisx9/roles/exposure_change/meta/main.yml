@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  author: Michael Chasse
+  description: AegisX9 external vantage exposure-change response (open an incident record)
+  license: Apache-2.0
+  min_ansible_version: "2.17"
+  platforms:
+    - name: GenericLinux
+      versions:
+        - all
+dependencies: []

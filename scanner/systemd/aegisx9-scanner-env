@@ -1,0 +1,69 @@
+#!/bin/bash
+# AegisX9 external vantage: boot-time secrets fetcher (installed to /usr/local/sbin, 0700).
+#
+# Reads parameter NAMES and non-secret settings from /etc/aegisx9-scanner/env-source.conf,
+# fetches each SecureString from the SSM Parameter Store with the instance role, and writes
+# every value by redirection into a 0600 root-owned file. No value is ever echoed, logged,
+# placed on a command line or written into the env file. Never add `set -x` here.
+set -euo pipefail
+umask 077
+
+CONF=/etc/aegisx9-scanner/env-source.conf
+DIR=/etc/aegisx9-scanner
+if [ ! -r "${CONF}" ]; then
+  echo "aegisx9-scanner-env: ${CONF} missing" >&2
+  exit 2
+fi
+# shellcheck disable=SC1090
+. "${CONF}"
+
+: "${AWS_REGION:?AWS_REGION missing in env-source.conf}"
+: "${WEBHOOK_URL_PARAMETER:?}" "${WEBHOOK_SECRET_PARAMETER:?}"
+: "${TUNNEL_SECRET_PARAMETER:?}" "${REDTEAM_KEY_PARAMETER:?}"
+export AWS_REGION
+
+# fetch <parameter name> <destination file>
+# The value travels from the AWS CLI's stdout straight into the file (0600, root).
+# A missing optional parameter leaves an empty file so the scan units still start.
+fetch() {
+  local name="$1" dest="$2" tmp
+  tmp="$(mktemp "${DIR}/.fetch.XXXXXX")"
+  if aws ssm get-parameter --with-decryption --name "${name}" \
+      --query Parameter.Value --output text > "${tmp}" 2>/dev/null; then
+    # strip the trailing newline the CLI adds
+    printf '%s' "$(cat "${tmp}")" > "${tmp}"
+  else
+    echo "aegisx9-scanner-env: parameter not readable: ${name} (continuing with empty value)" >&2
+    : > "${tmp}"
+  fi
+  chmod 0600 "${tmp}"
+  mv -f "${tmp}" "${dest}"
+}
+
+fetch "${WEBHOOK_SECRET_PARAMETER}" "${DIR}/webhook_secret"
+fetch "${TUNNEL_SECRET_PARAMETER}"  "${DIR}/tunnel_secret"
+fetch "${REDTEAM_KEY_PARAMETER}"    "${DIR}/redteam_key"
+fetch "${WEBHOOK_URL_PARAMETER}"    "${DIR}/webhook_url"
+
+# Non-secret environment for the scan units. The secret *_FILE paths are set by the
+# units themselves (LoadCredential=), not here, so this file never names a secret.
+tmp_env="$(mktemp "${DIR}/.env.XXXXXX")"
+{
+  echo "# Written at boot by aegisx9-scanner-env. Non-secret settings only."
+  printf 'AEGISX9_SCANNER_WEBHOOK_URL=%s\n' "$(cat "${DIR}/webhook_url")"
+  printf 'AEGISX9_SCANNER_AWS_REGION=%s\n' "${AWS_REGION}"
+  printf 'AEGISX9_SCANNER_SES_FROM=%s\n' "${SES_FROM:-}"
+  printf 'AEGISX9_SCANNER_SES_TO=%s\n' "${SES_TO:-}"
+  printf 'AEGISX9_SCANNER_REDTEAM_TARGET_URL=%s\n' "${REDTEAM_TARGET_URL:-}"
+  printf 'AEGISX9_SCANNER_REDTEAM_MODEL=%s\n' "${REDTEAM_MODEL:-}"
+  printf 'AEGISX9_SCANNER_ALERT_MIN_SEVERITY=%s\n' "${ALERT_MIN_SEVERITY:-medium}"
+  if [ "${VAULT_AWS_AUTH_ENABLED:-false}" = "true" ]; then
+    # TODO(platform operations): Vault AWS IAM auth. The host authenticates with its
+    # instance role; no Vault secret is stored on the box. Paths are not decided here.
+    printf 'VAULT_ADDR=%s\n' "${VAULT_ADDR:-}"
+    printf 'VAULT_AUTH_ROLE=%s\n' "${VAULT_AUTH_ROLE:-}"
+  fi
+} > "${tmp_env}"
+chmod 0600 "${tmp_env}"
+mv -f "${tmp_env}" "${DIR}/env"
+echo "aegisx9-scanner-env: secrets refreshed into ${DIR} (0600 root)"
