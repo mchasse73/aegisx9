@@ -148,6 +148,8 @@ spec:
               value: {{ .Values.wif.upstream | quote }}
             - name: AEGISX9_WIF_REFRESH_FRACTION
               value: {{ .Values.wif.refreshFraction | quote }}
+            - name: AEGISX9_WIF_UPLOADED_KIDS
+              value: {{ join "," .Values.wif.uploadedKids | quote }}
             - name: ANTHROPIC_FEDERATION_RULE_ID
               valueFrom:
                 secretKeyRef:

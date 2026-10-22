@@ -90,7 +90,8 @@ Work is tracked in GitHub Issues, Milestones and a Projects board.
 
 | Path | Contents |
 |------|----------|
-| `src/aegisx9/` | Guard pipeline, guards, audit-event schema, audit signing (Vault transit), policy, LiteLLM hook adapter, Workload Identity Federation broker for the model provider (no static key; [ADR 0009](docs/adr/0009-workload-identity-federation-for-the-model-provider.md)), budget and key-rotation jobs |
+| `src/aegisx9/` | Guard pipeline, guards, audit-event schema, audit signing (Vault transit), policy, LiteLLM hook adapter, Workload Identity Federation broker for the model provider (no static key; [ADR 0009](docs/adr/0009-workload-identity-federation-for-the-model-provider.md)), budget jobs and the federation signing-key check (`wif.uploadedKids`) |
+| `Dockerfile` | Gateway image: LiteLLM proxy with the Prisma client, CLI, engines and Node.js baked in, so database migrations need no network and the root filesystem stays read-only |
 | `tests/` | Unit tests (coverage gate 85%) |
 | `deploy/helm/aegisx9/` | Helm chart (LiteLLM proxy, config, NetworkPolicy, restricted PodSecurity) |
 | `deploy/overlays/{staging,prod}` | Kustomize overlays consumed by Argo CD |

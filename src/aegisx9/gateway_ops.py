@@ -10,10 +10,12 @@ gateway's namespace:
     Logs one ``aegisx9_spend`` JSON line for the proxy-wide budget and one per consumer,
     with the percentage used. Loki rules alert at 50/80/100 %.
 ``check-jwks``
-    Fetches Vault's OIDC identity signing keys (``identity/oidc/.well-known/keys``) and
-    compares their digest with the one the Anthropic federation issuer was configured with.
-    When the issuer holds the keys inline, a key rotation in Vault breaks every token
-    exchange until the issuer is updated.
+    Fetches the secrets store's published OIDC identity keys (``identity/oidc/.well-known/keys``)
+    and checks that every key id uploaded to the Anthropic federation issuer
+    (``AEGISX9_WIF_UPLOADED_KIDS``) is still published. That endpoint lists every identity
+    key, including ones that rotate on their own schedule, so the check never compares the
+    whole set; an uploaded key that disappears means the store rotated it and every token
+    exchange will fail until the new public key is uploaded.
 
 The admin key is read from ``LITELLM_MASTER_KEY`` (a Secret reference) and is never logged.
 Errors are logged by exception type name only. Standard library only.
@@ -305,22 +307,34 @@ def jwks_digest(document: Mapping[str, Any]) -> str:
     return hashlib.sha256("\n".join(canonical).encode()).hexdigest()
 
 
-def check_jwks(request: Request, vault_addr: str, expected: Sequence[str]) -> int:
-    """The keys endpoint is unauthenticated: no Vault token is needed or sent."""
+def parse_kids(value: str) -> list[str]:
+    """Comma-separated key ids, blanks dropped, order kept, duplicates removed."""
+    return list(dict.fromkeys(k.strip() for k in value.split(",") if k.strip()))
+
+
+def check_jwks(request: Request, vault_addr: str, uploaded_kids: Sequence[str]) -> int:
+    """The keys endpoint is unauthenticated: no Vault token is needed or sent.
+
+    Logs one ``aegisx9_jwks`` line. Key ids are public identifiers; the digest of the
+    published set is informational only (the set changes whenever any key rotates).
+    """
     status, data = request("GET", vault_addr.rstrip("/") + VAULT_KEYS_PATH, {}, None)
     if status != 200 or not isinstance(data, dict):
         raise OpsError(f"JWKS fetch returned {status}")
     digest = jwks_digest(data)
-    expected_set = {e.strip().lower() for e in expected if e.strip()}
+    published = {k.get("kid") for k in data["keys"] if isinstance(k, dict)}
+    uploaded = [k for k in uploaded_kids if k.strip()]
+    missing = [k for k in uploaded if k not in published]
     logger.info(
         "jwks check",
         extra={
             "fields": {
-                "event": "aegisx9_jwks_check",
+                "event": "aegisx9_jwks",
+                "missing_uploaded_kids": missing,
+                "missing_count": len(missing),
+                "uploaded_count": len(uploaded),
+                "published_count": len(data["keys"]),
                 "sha256": digest,
-                "baseline_missing": not expected_set,
-                "changed": bool(expected_set) and digest not in expected_set,
-                "key_count": len(data["keys"]),
             }
         },
     )
@@ -352,8 +366,8 @@ def run(argv: Sequence[str], env: Mapping[str, str], request: Request | None = N
             if request is None:
                 context = ssl.create_default_context(cafile=env.get("VAULT_CACERT") or None)
                 request = urllib_request(context)
-            expected = env.get("AEGISX9_JWKS_EXPECTED_SHA256", "").split(",")
-            return check_jwks(request, vault_addr, expected)
+            uploaded = parse_kids(env.get("AEGISX9_WIF_UPLOADED_KIDS", ""))
+            return check_jwks(request, vault_addr, uploaded)
         plan = BudgetPlan.load(env.get("AEGISX9_BUDGET_PLAN", "/etc/aegisx9-budgets/plan.json"))
         client = _admin_client(env, request or urllib_request())
         if command == "bootstrap-teams":

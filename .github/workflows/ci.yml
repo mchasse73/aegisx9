@@ -179,34 +179,78 @@ jobs:
           build-args: VERSION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: proxy boots with the guard loaded (smoke test)
+      - name: proxy boots with the guard loaded (smoke test, without and with a database)
         env:
           IMG: aegisx9:ci-${{ github.sha }}
+          # Official postgres:17.11 image, pinned by digest. Started as a step container, not
+          # a job service: services start before any step, so a password generated at
+          # runtime could not reach them, and a literal one would sit in the repository.
+          PG_IMG: postgres:17.11@sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe
         run: |
           set -euo pipefail
           # Render the real chart config, then start the proxy offline with throwaway
           # credentials generated here; the guard callback must load and /health/liveliness
-          # must answer. No provider is called.
+          # must answer. No provider is called. The container runs as in the cluster:
+          # non-root, read-only root filesystem, HOME and the only writable path on /tmp.
           helm template ci deploy/helm/aegisx9 --set gateway.otel.enabled=false --set gateway.oidc.enabled=false \
             --show-only templates/configmap.yaml \
             | python3 -c 'import sys,yaml; print(yaml.safe_load(sys.stdin)["data"]["config.yaml"])' > "${RUNNER_TEMP}/config.yaml"
-          master="sk-$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
-          printf 'LITELLM_MASTER_KEY=%s\nAEGIS_PRINCIPAL_SALT=%s\nOPENAI_API_KEY=%s\nANTHROPIC_API_KEY=%s\n' \
-            "${master}" "$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')" "unused" "unused" > "${RUNNER_TEMP}/smoke.env"
-          docker run -d --name smoke -p 4000:4000 --env-file "${RUNNER_TEMP}/smoke.env" \
-            -v "${RUNNER_TEMP}/config.yaml:/etc/aegisx9/config.yaml:ro" "${IMG}" \
-            --config /etc/aegisx9/config.yaml --port 4000 >/dev/null
-          rm -f "${RUNNER_TEMP}/smoke.env"
-          for _ in $(seq 1 45); do
-            if curl -fsS --max-time 2 http://127.0.0.1:4000/health/liveliness >/dev/null 2>&1; then
-              echo "proxy is up with the guard loaded"; docker rm -f smoke >/dev/null; exit 0
-            fi
-            if [ "$(docker inspect -f '{{.State.Running}}' smoke)" != "true" ]; then break; fi
+          rnd() { python3 -c 'import secrets; print(secrets.token_urlsafe(24))'; }
+          umask 077
+          printf 'LITELLM_MASTER_KEY=sk-%s\nAEGIS_PRINCIPAL_SALT=%s\nOPENAI_API_KEY=%s\nANTHROPIC_API_KEY=%s\nHOME=/tmp\n' \
+            "$(rnd)" "$(rnd)" "unused" "unused" > "${RUNNER_TEMP}/smoke.env"
+
+          logs() {
+            echo "last log lines of $1:"
+            docker logs "$1" 2>&1 | tail -n 40 | grep -viE 'key|token|secret|password|postgres(ql)?://' || true
+          }
+          # boot <name> <port> <timeout s> <docker run args...>: start the gateway and wait
+          # for /health/liveliness; fail with filtered logs if it exits or never answers.
+          boot() {
+            local name="$1" port="$2" timeout="$3"; shift 3
+            docker run -d --name "${name}" --read-only --tmpfs /tmp:rw,size=256m \
+              --env-file "${RUNNER_TEMP}/smoke.env" "$@" \
+              -v "${RUNNER_TEMP}/config.yaml:/etc/aegisx9/config.yaml:ro" "${IMG}" \
+              --config /etc/aegisx9/config.yaml --port "${port}" >/dev/null
+            local deadline=$((SECONDS + timeout))
+            while [ "${SECONDS}" -lt "${deadline}" ]; do
+              if curl -fsS --max-time 2 "http://127.0.0.1:${port}/health/liveliness" >/dev/null 2>&1; then
+                echo "${name}: proxy is up with the guard loaded"; return 0
+              fi
+              if [ "$(docker inspect -f '{{.State.Running}}' "${name}")" != "true" ]; then break; fi
+              sleep 2
+            done
+            echo "${name}: proxy did not start"; logs "${name}"; return 1
+          }
+          cleanup() { docker rm -f smoke smoke-db smoke-pg >/dev/null 2>&1 || true; rm -f "${RUNNER_TEMP}"/*.env; }
+          trap cleanup EXIT
+
+          # 1. No database.
+          boot smoke 4000 90 -p 4000:4000
+          docker rm -f smoke >/dev/null
+
+          # 2. The Prisma toolchain is baked: it runs with no network at all.
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,size=64m -e HOME=/tmp \
+            --entrypoint sh "${IMG}" -c '"${PRISMA_CLI_PATH}" --version >/dev/null && prisma --version >/dev/null' \
+            || { echo "prisma CLI does not run offline"; exit 1; }
+          echo "prisma CLI runs offline"
+
+          # 3. With Postgres: LiteLLM applies its migrations at startup, then serves.
+          pg_password="$(rnd)"
+          printf 'POSTGRES_USER=aegisx9\nPOSTGRES_DB=aegisx9\nPOSTGRES_PASSWORD=%s\n' "${pg_password}" > "${RUNNER_TEMP}/pg.env"
+          docker run -d --name smoke-pg -p 127.0.0.1:5432:5432 --env-file "${RUNNER_TEMP}/pg.env" "${PG_IMG}" >/dev/null
+          for _ in $(seq 1 30); do
+            docker exec smoke-pg pg_isready -q -h 127.0.0.1 -U aegisx9 -d aegisx9 && break
             sleep 2
           done
-          echo "proxy did not start; last log lines:"
-          docker logs smoke 2>&1 | tail -n 30 | grep -viE 'key|token|secret' || true
-          docker rm -f smoke >/dev/null; exit 1
+          docker exec smoke-pg pg_isready -q -h 127.0.0.1 -U aegisx9 -d aegisx9
+          printf 'DATABASE_URL=postgresql://aegisx9:%s@127.0.0.1:5432/aegisx9\n' "${pg_password}" >> "${RUNNER_TEMP}/smoke.env"
+          unset pg_password
+          boot smoke-db 4001 300 --network host
+          applied="$(docker exec smoke-pg psql -qtAX -U aegisx9 -d aegisx9 \
+            -c 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL')"
+          echo "LiteLLM migrations applied: ${applied}"
+          [ "${applied}" -gt 0 ] || { logs smoke-db; exit 1; }
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: aegisx9:ci-${{ github.sha }}

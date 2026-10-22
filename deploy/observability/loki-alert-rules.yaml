@@ -99,29 +99,41 @@ groups:
           severity: critical
         annotations:
           summary: "Federation broker {{ $labels.pod }} has held no valid provider token for 5 minutes"
-      - alert: AegisX9FederationKeysChanged
+      - alert: AegisX9WifKidNotUploaded
         expr: |
-          sum by (namespace) (
+          sum by (namespace, kid) (
             count_over_time(
-              {namespace=~"aegisx9-(staging|prod)"} |= "aegisx9_jwks_check"
-                | json changed="changed"
-                | changed = "true" [2h]
+              {namespace=~"aegisx9-(staging|prod)", container="wif-broker"} |= "wif_kid_not_uploaded"
+                | json kid="kid" [15m]
             )
           ) > 0
         labels:
           severity: critical
         annotations:
-          summary: "Vault's OIDC signing keys changed; update the federation issuer's inline JWKS"
-      - alert: AegisX9FederationKeysBaselineMissing
+          summary: "Identity token signed by key {{ $labels.kid }}, which is not in wif.uploadedKids; upload its public key to the federation issuer"
+      - alert: AegisX9FederationKeyNotPublished
         expr: |
           sum by (namespace) (
             count_over_time(
-              {namespace=~"aegisx9-(staging|prod)"} |= "aegisx9_jwks_check"
-                | json baseline_missing="baseline_missing"
-                | baseline_missing = "true" [2h]
+              {namespace=~"aegisx9-(staging|prod)"} |= "aegisx9_jwks"
+                | json missing_count="missing_count"
+                | missing_count > 0 [2h]
+            )
+          ) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "A key id in wif.uploadedKids is no longer published by the secrets store; the signing key rotated"
+      - alert: AegisX9FederationKidsNotConfigured
+        expr: |
+          sum by (namespace) (
+            count_over_time(
+              {namespace=~"aegisx9-(staging|prod)"} |= "aegisx9_jwks"
+                | json uploaded_count="uploaded_count"
+                | uploaded_count = "0" [2h]
             )
           ) > 0
         labels:
           severity: warning
         annotations:
-          summary: "No expected federation-key digest is configured (wif.jwksCheck.expectedSha256)"
+          summary: "No uploaded federation key ids are configured (wif.uploadedKids)"

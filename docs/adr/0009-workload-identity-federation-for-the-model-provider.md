@@ -75,18 +75,32 @@ issuer, so the identity token has to come from an issuer the provider accepts.
 
 ## Consequences
 
-- **Signing-key rotation breaks exchanges.** The federation issuer holds Vault's public keys
-  inline; when Vault rotates its OIDC signing key, every exchange fails until the issuer is
-  updated. An hourly job compares Vault's `identity/oidc/.well-known/keys` digest with the
-  configured one and alerts on change (`AegisX9FederationKeysChanged`); the broker alerts
-  when it has held no valid token for five minutes (`AegisX9WifNoValidToken`). Publishing
-  a new key well before it signs anything, and keeping the old one until its tokens expire,
-  avoids an outage.
+- **Signing-key rotation breaks exchanges.** The federation issuer holds the public key of
+  Vault's `aegisx9-anthropic` OIDC signing key inline; when Vault rotates that key, every
+  exchange fails until the issuer has the new public key. Vault's
+  `identity/oidc/.well-known/keys` endpoint publishes every identity key, including a
+  built-in key that rotates daily, so the set as a whole changes every day and is not a
+  usable signal (an earlier digest comparison of the whole set alerted daily). Instead:
+  - chart value `wif.uploadedKids` lists the key ids (`kid`, public identifiers) uploaded
+    to the issuer;
+  - the broker decodes only the header of each identity token it mints (no verification,
+    the token is never logged) and logs `wif_kid_not_uploaded` when its `kid` is not in
+    that list (`AegisX9WifKidNotUploaded`); it still attempts the exchange, which the
+    provider refuses;
+  - an hourly job checks that every uploaded kid is still published and logs
+    `missing_uploaded_kids` (`AegisX9FederationKeyNotPublished`);
+  - the broker alerts when it has held no valid token for five minutes
+    (`AegisX9WifNoValidToken`).
+
+  **Key rotation runbook.** Vault rotates `aegisx9-anthropic` every 90 days and publishes
+  the next key before it signs anything. Before each rotation, upload the new public key to
+  the Anthropic issuer next to the current one and add its kid to `wif.uploadedKids`; remove
+  the old kid only after the old key has stopped signing and its tokens have expired.
 - Vault is on the request path for token refresh (not for each model call). An access token
   stays valid for up to an hour, so a short Vault outage is absorbed.
 - Budgets need the proxy database (`DATABASE_URL`); without it LiteLLM only warns.
 - Rollout is two-step: this change ships the code and chart with `wif.enabled` and the
-  budget/JWKS jobs off in staging; a follow-up promotes the signed image that contains the
+  budget and signing-key check jobs off in staging; a follow-up promotes the signed image that contains the
   broker and `gateway_ops` and turns them on in the same change.
 - Team budgets apply to callers whose identity-provider groups map to the team ids.
 - The broker is new code on a sensitive path; it is covered by unit tests for the exchange

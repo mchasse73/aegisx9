@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import http.client
 import json
@@ -8,6 +9,7 @@ import secrets
 import socket
 import stat
 import threading
+import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -461,6 +463,80 @@ def test_unusable_identity_token_backs_off(tmp_path: Path, content: str | None) 
     m = wb.TokenManager(cfg, ex, clock=Clock(), rng=lambda: 0.0)
     assert m.step() == pytest.approx(0.5)
     assert ex.assertions == []
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _jwt(header: object) -> str:
+    # Shaped like a compact JWT, generated per run; the signature is random bytes.
+    return ".".join(
+        [
+            _b64url(json.dumps(header).encode()),
+            _b64url(json.dumps({"jti": secrets.token_hex(8)}).encode()),
+            _b64url(secrets.token_bytes(32)),
+        ]
+    )
+
+
+def test_jwt_kid() -> None:
+    kid = str(uuid.uuid4())
+    assert wb.jwt_kid(_jwt({"alg": "RS256", "kid": kid})) == kid
+    assert wb.jwt_kid(_jwt({"alg": "RS256"})) is None
+    assert wb.jwt_kid(_jwt({"alg": "RS256", "kid": 7})) is None
+    assert wb.jwt_kid(_jwt(["not", "an", "object"])) is None
+    assert wb.jwt_kid("%%%." + secrets.token_hex(4)) is None
+    assert wb.jwt_kid(_b64url(b"not json") + ".x.y") is None
+    assert wb.jwt_kid("") is None
+    assert wb.jwt_kid("a" * (wb.MAX_JWT_HEADER_CHARS + 1) + ".x.y") is None
+
+
+def test_config_uploaded_kids(tmp_path: Path) -> None:
+    kids = [str(uuid.uuid4()), str(uuid.uuid4())]
+    cfg = wb.BrokerConfig.from_env(
+        _env(tmp_path, AEGISX9_WIF_UPLOADED_KIDS=f" {kids[0]},,{kids[1]} ,{kids[0]}")
+    )
+    assert cfg.uploaded_kids == tuple(kids)
+    assert wb.BrokerConfig.from_env(_env(tmp_path)).uploaded_kids == ()
+
+
+def _kid_events(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    return [
+        getattr(r, "fields", {})
+        for r in caplog.records
+        if getattr(r, "fields", {}).get("event") == "wif_kid_not_uploaded"
+    ]
+
+
+@pytest.mark.parametrize("scenario", ["uploaded", "other", "unsafe", "no_kid", "unchecked"])
+def test_kid_check_on_each_new_identity_token(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, scenario: str
+) -> None:
+    uploaded, other = str(uuid.uuid4()), str(uuid.uuid4())
+    header: dict[str, Any] = {"alg": "RS256"}
+    if scenario != "no_kid":
+        header["kid"] = {
+            "uploaded": uploaded,
+            "unchecked": other,
+            "other": other,
+            "unsafe": "bad kid\n" + "x" * 200,
+        }[scenario]
+    kids = () if scenario == "unchecked" else (uploaded,)
+    cfg = _cfg(tmp_path, uploaded_kids=kids)
+    assertion = _jwt(header)
+    ex = FakeExchange()
+    m = wb.TokenManager(cfg, ex, clock=Clock(), source=lambda: assertion)
+    with caplog.at_level(logging.INFO, logger="aegisx9.wif_broker"):
+        m.step()
+    # The exchange always goes ahead: the provider is the one that refuses it.
+    assert ex.assertions == [assertion]
+    events = _kid_events(caplog)
+    expected = {"uploaded": [], "unchecked": [], "other": [other], "unsafe": [None]}
+    assert [e["kid"] for e in events] == expected.get(scenario, [None])
+    # The identity token itself never reaches the log.
+    assert assertion not in caplog.text
+    assert assertion.split(".")[2] not in caplog.text
 
 
 def test_state_file_survives_restart_without_secrets(tmp_path: Path) -> None:

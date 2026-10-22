@@ -61,6 +61,7 @@ mypy_path = "src:scripts/ci:scanner"
 files = [
   "src/aegisx9",
   "scripts/ci",
+  "scripts/image",
   "scanner/aegisx9_scanner",
   "workspace/image/bin",
   "workspace/image/render_settings.py",
