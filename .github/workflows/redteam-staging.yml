@@ -50,7 +50,8 @@ jobs:
       contents: read
       actions: read # download the digest artifact from the triggering release run
     env:
-      AEGIS_STAGING_URL: ${{ vars.AEGIS_STAGING_URL }}
+      AEGIS_STAGING_URL: ${{ secrets.AEGIS_STAGING_URL }} # a secret, not a variable: masked from the first log line
+      AEGISX9_EXTRA_IDENTIFIER_PATTERNS: ${{ secrets.INTERNAL_IDENTIFIER_PATTERNS }}
       AEGIS_REDTEAM_MODEL: ${{ vars.AEGIS_REDTEAM_MODEL }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,13 +72,16 @@ jobs:
         with:
           python-version: "3.12"
       - name: promptfoo suite
+        shell: bash
         env:
           AEGIS_REDTEAM_KEY: ${{ secrets.AEGIS_REDTEAM_KEY }}
         run: |
           npx --yes "promptfoo@${PROMPTFOO_VERSION}" eval \
             --config redteam/promptfoo/promptfooconfig.yaml \
-            --no-cache --no-share --output redteam/results/promptfoo.json
+            --no-cache --no-share --output redteam/results/promptfoo.json 2>&1 \
+            | python3 scripts/ci/redact_log.py --mask-env AEGIS_STAGING_URL
       - name: garak suite
+        shell: bash
         env:
           OPENAICOMPATIBLE_API_KEY: ${{ secrets.AEGIS_REDTEAM_KEY }}
         run: |
@@ -85,7 +89,8 @@ jobs:
           python3 redteam/garak/render_generator.py > "${RUNNER_TEMP}/garak-generator.json"
           python3 -m garak --config redteam/garak/aegisx9.yaml \
             --generator_option_file "${RUNNER_TEMP}/garak-generator.json" \
-            --report_prefix "${RUNNER_TEMP}/garak/aegisx9"
+            --report_prefix "${RUNNER_TEMP}/garak/aegisx9" 2>&1 \
+            | python3 scripts/ci/redact_log.py --mask-env AEGIS_STAGING_URL
           python3 redteam/garak/gate.py \
             --report "${RUNNER_TEMP}/garak/aegisx9.report.jsonl" \
             --thresholds redteam/garak/thresholds.json

@@ -52,6 +52,20 @@ jobs:
           path: coverage.xml
           retention-days: 14
 
+  identifier-check:
+    name: identifier check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: no internal identifiers in tracked files
+        env:
+          # Optional extra patterns from a repository secret; empty on forks. Never printed.
+          AEGISX9_EXTRA_IDENTIFIER_PATTERNS: ${{ secrets.INTERNAL_IDENTIFIER_PATTERNS }}
+        run: python3 scripts/ci/check_identifiers.py
+
   secret-scan:
     name: gitleaks
     runs-on: ubuntu-latest
