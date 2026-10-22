@@ -9,6 +9,9 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 - infra-apply runs only when the repository variable `INFRA_APPLY_ENABLED` is `true`, until the
   Terraform Enterprise workspaces and token exist (refs #17).
+- Staging runs on Workload Identity Federation: new signed image with the broker, models
+  `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-opus-5-5`, budget jobs and the signing-key
+  check enabled (refs #53).
 
 ### Fixed
 - The guard callback subclasses LiteLLM's CustomLogger so the proxy loads it; CI boots the proxy
