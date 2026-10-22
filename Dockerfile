@@ -33,34 +33,13 @@ ENV PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     PRISMA_USE_NODEJS_BIN=false \
     CHECKPOINT_DISABLE=1 \
     PATH=/opt/prisma/node/bin:/opt/venv/bin:$PATH
+COPY scripts/image/bake_prisma.py /src/scripts/image/bake_prisma.py
 COPY --from=node /usr/local/bin/node /opt/prisma/node/bin/node
 COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && SCHEMA="$(python -c 'import litellm.proxy, pathlib; print(pathlib.Path(litellm.proxy.__file__).parent / "schema.prisma")')" \
  && prisma generate --schema "${SCHEMA}" \
- && python - <<'PY'
-import os
-import subprocess
-from pathlib import Path
-
-from prisma.binaries import platform
-from prisma.client import BINARY_PATHS
-
-# Pick the query engine built for this platform. The schema lists several binaryTargets;
-# probing the others at runtime would execute binaries for a different libc.
-target = platform.binary_platform()
-paths = BINARY_PATHS.query_engine
-assert target in paths, (target, sorted(paths))
-engine = Path(paths[target])
-assert str(engine).startswith("/opt/prisma/"), engine
-subprocess.run([str(engine), "--version"], check=True, stdout=subprocess.DEVNULL)
-link = Path("/opt/prisma/query-engine")
-link.symlink_to(engine)
-cli = Path(os.environ["PRISMA_BINARY_CACHE_DIR"]) / "node_modules/prisma/build/index.js"
-assert cli.is_file(), cli
-assert not Path(os.environ["PRISMA_NODEENV_CACHE_DIR"]).exists()
-print(f"prisma engine for {target} baked")
-PY
+ && python scripts/image/bake_prisma.py
 RUN chmod -R a+rX /opt/prisma
 
 FROM python:3.12-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2

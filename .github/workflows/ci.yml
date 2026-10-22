@@ -237,7 +237,6 @@ jobs:
 
           # 3. With Postgres: LiteLLM applies its migrations at startup, then serves.
           pg_password="$(rnd)"
-          echo "::add-mask::${pg_password}"
           printf 'POSTGRES_USER=aegisx9\nPOSTGRES_DB=aegisx9\nPOSTGRES_PASSWORD=%s\n' "${pg_password}" > "${RUNNER_TEMP}/pg.env"
           docker run -d --name smoke-pg -p 127.0.0.1:5432:5432 --env-file "${RUNNER_TEMP}/pg.env" "${PG_IMG}" >/dev/null
           for _ in $(seq 1 30); do
