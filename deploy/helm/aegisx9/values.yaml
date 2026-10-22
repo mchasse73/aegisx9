@@ -82,6 +82,11 @@ gateway:
 # come from existingSecret keys ANTHROPIC_FEDERATION_RULE_ID, ANTHROPIC_ORGANIZATION_ID,
 # ANTHROPIC_SERVICE_ACCOUNT_ID and (optional) ANTHROPIC_WORKSPACE_ID: identifiers, not
 # credentials, but they stay out of Git.
+# Day-2 job pods (budget bootstrap, spend check, signing-key check).
+opsJobs:
+  # Optional priority class for the short-lived job pods.
+  priorityClassName: ""
+
 wif:
   enabled: false
   # Vault address. Empty = read from existingSecret key VAULT_ADDR (preferred).

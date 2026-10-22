@@ -27,6 +27,7 @@ import logging
 import os
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -135,20 +136,42 @@ class BudgetPlan:
 Request = Callable[[str, str, Mapping[str, str], bytes | None], tuple[int, Any]]
 
 
-def urllib_request(context: ssl.SSLContext | None = None, timeout: float = 30.0) -> Request:
+def urllib_request(
+    context: ssl.SSLContext | None = None,
+    timeout: float = 30.0,
+    connect_retry_seconds: float = 60.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Request:
+    """HTTP helper for the day-2 jobs.
+
+    A short-lived pod can be refused for its first seconds while the network policy
+    controller adds its address, so connection failures (not HTTP errors) are retried for
+    up to ``connect_retry_seconds`` before giving up.
+    """
+
     def _request(
         method: str, url: str, headers: Mapping[str, str], body: bytes | None
     ) -> tuple[int, Any]:
         if urlsplit(url).scheme not in {"http", "https"}:
             raise OpsError("unsupported URL scheme")
         req = urllib.request.Request(url, data=body, method=method, headers=dict(headers))  # noqa: S310 - scheme checked above
-        try:
-            with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:  # noqa: S310 - scheme checked above
-                raw = resp.read(4 * 1024 * 1024)
-                status = resp.status
-        except urllib.error.HTTPError as e:
-            status, raw = e.code, b""
-            e.close()
+        waited, delay = 0.0, 2.0
+        while True:
+            try:
+                with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:  # noqa: S310 - scheme checked above
+                    raw = resp.read(4 * 1024 * 1024)
+                    status = resp.status
+                break
+            except urllib.error.HTTPError as e:
+                status, raw = e.code, b""
+                e.close()
+                break
+            except (urllib.error.URLError, ConnectionError, TimeoutError):
+                if waited >= connect_retry_seconds:
+                    raise
+                sleep(delay)
+                waited += delay
+                delay = min(delay * 2, 10.0)
         try:
             return status, json.loads(raw) if raw else None
         except ValueError:

@@ -422,3 +422,51 @@ def test_main_uses_argv(monkeypatch: pytest.MonkeyPatch) -> None:
     assert ops.main() == 2
     logging.getLogger("aegisx9").handlers[:] = []
     logging.getLogger("aegisx9").propagate = True
+
+
+def test_urllib_request_retries_connection_errors_then_succeeds(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import io
+    import urllib.error
+
+    from aegisx9 import gateway_ops
+
+    calls = {"n": 0}
+
+    class _Resp(io.BytesIO):
+        status = 200
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *a):  # type: ignore[no-untyped-def]
+            return False
+
+    def fake_urlopen(req, timeout, context):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise urllib.error.URLError("refused")
+        return _Resp(b'{"ok": true}')
+
+    slept: list[float] = []
+    monkeypatch.setattr(gateway_ops.urllib.request, "urlopen", fake_urlopen)
+    req = gateway_ops.urllib_request(sleep=slept.append)
+    assert req("GET", "http://gw:4000/health", {}, None) == (200, {"ok": True})
+    assert calls["n"] == 3 and slept == [2.0, 4.0]
+
+
+def test_urllib_request_gives_up_after_the_retry_window(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import urllib.error
+
+    import pytest
+
+    from aegisx9 import gateway_ops
+
+    def always_refused(req, timeout, context):  # type: ignore[no-untyped-def]
+        raise urllib.error.URLError("refused")
+
+    slept: list[float] = []
+    monkeypatch.setattr(gateway_ops.urllib.request, "urlopen", always_refused)
+    req = gateway_ops.urllib_request(connect_retry_seconds=15.0, sleep=slept.append)
+    with pytest.raises(urllib.error.URLError):
+        req("GET", "http://gw:4000/health", {}, None)
+    assert sum(slept) >= 15.0
