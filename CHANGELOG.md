@@ -6,33 +6,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-### Changed
-- infra-apply runs only when the repository variable `INFRA_APPLY_ENABLED` is `true`, until the
-  Terraform Enterprise workspaces and token exist (refs #17).
-- Staging runs on Workload Identity Federation: new signed image with the broker, models
-  `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-opus-5-5`, budget jobs and the signing-key
-  check enabled (refs #53).
-
-### Fixed
-- Day-2 jobs retry connection failures for up to 60 seconds (a new pod can be refused for its
-  first seconds while network policy catches up) and can set a priority class (refs #53).
-- Dependency bumps: hatchling 1.32.4, pytest 9.1.1, pytest-cov 7.1.0, ruff 0.17.1, mypy 2.4.0,
-  checkov-action 12.3134.0 (supersedes Dependabot PRs #34 to #39).
-- The gateway image starts with a database: the Prisma client (`prisma==0.11.0`, the version
-  LiteLLM 1.106.2 ships), its CLI, query and schema engines and a digest-pinned Node.js are
-  baked in at build time, the client is generated from LiteLLM's schema, and LiteLLM's
-  migrations run from `/tmp` (`LITELLM_MIGRATION_DIR`), so nothing is downloaded at runtime and
-  the read-only root filesystem holds. CI now also boots the image read-only against Postgres 17
-  and checks that the migrations were applied, and that the Prisma CLI runs with no network.
-- The signing-key check no longer alerts every day: it compared a digest of every key Vault
-  publishes, including a built-in key that rotates daily. The broker now checks the `kid` of
-  each identity token against `wif.uploadedKids` (`wif_kid_not_uploaded`), and the hourly job
-  checks that every uploaded kid is still published (`missing_uploaded_kids`). The
-  `wif.jwksCheck.expectedSha256` value and its alerts are removed; ADR 0009 describes key
-  rotation.
-- The guard callback subclasses LiteLLM's CustomLogger so the proxy loads it; CI boots the proxy
-  with the real config as a smoke test; ExternalSecret defaults are explicit to avoid Argo CD
-  drift (refs #8).
+## [0.2.0] - 2026-10-22
 
 ### Added
 - Anthropic through Workload Identity Federation, with no static provider key (ADR 0009):
@@ -52,23 +26,6 @@ All notable changes to this project are documented here. The format follows
   identifiers (generic patterns in the repo, organisation-specific ones only from a CI secret), and a log redaction filter used by
   the self-hosted workflows so Terraform plan bodies and internal URLs stay out of public
   Actions logs (refs #1).
-
-### Changed
-- Release signs and attests in cosign's legacy layout so the cluster's keyless image
-  verifier finds the signature; overlays no longer render a NetworkPolicy (platform-owned);
-  the Argo CD AppProject file mirrors the live, namespace-whitelisted project (refs #8).
-- Branch protection no longer requires an approving review (single maintainer); required
-  checks, linear history, conversation resolution and admin enforcement remain (refs #1).
-- Staging overlay pinned to the first release digest signed in the legacy cosign layout; overlays no longer carry the
-  Namespace object, which the platform team owns (refs #8).
-
-### Fixed
-- First CI run: Checkov runs one framework per step, the rollout-wait script selects the
-  namespace literal by comparison (no tainted argv for SAST), and GitHub provenance
-  attestation is skipped while the repository is private; the gitleaks job can read PR
-  commits (refs #2).
-
-### Added
 - Developer tier: Coder workspace template as Terraform (`infra/workspaces/coder-template`):
   one restricted pod per developer running the signed workspace image by digest, persistent
   home, CPU/memory/team parameters, gateway and OTel environment, no provider key; the
@@ -120,3 +77,43 @@ All notable changes to this project are documented here. The format follows
 - Ansible collection `x9.aegisx9`, AAP playbooks and an Event-Driven Ansible rulebook.
 - CI jobs for Terraform (fmt, validate, tflint, Checkov), Sentinel tests and ansible-lint;
   `infra-apply` workflow for TFE runs on ARC runners.
+
+### Changed
+- infra-apply runs only when the repository variable `INFRA_APPLY_ENABLED` is `true`, until the
+  Terraform Enterprise workspaces and token exist (refs #17).
+- Staging runs on Workload Identity Federation: new signed image with the broker, models
+  `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-opus-5-5`, budget jobs and the signing-key
+  check enabled (refs #53).
+- Release signs and attests in cosign's legacy layout so the cluster's keyless image
+  verifier finds the signature; overlays no longer render a NetworkPolicy (platform-owned);
+  the Argo CD AppProject file mirrors the live, namespace-whitelisted project (refs #8).
+- Branch protection no longer requires an approving review (single maintainer); required
+  checks, linear history, conversation resolution and admin enforcement remain (refs #1).
+- Staging overlay pinned to the first release digest signed in the legacy cosign layout; overlays no longer carry the
+  Namespace object, which the platform team owns (refs #8).
+
+### Fixed
+- Day-2 jobs retry connection failures for up to 60 seconds (a new pod can be refused for its
+  first seconds while network policy catches up) and can set a priority class (refs #53).
+- Dependency bumps: hatchling 1.32.4, pytest 9.1.1, pytest-cov 7.1.0, ruff 0.17.1, mypy 2.4.0,
+  checkov-action 12.3134.0 (supersedes Dependabot PRs #34 to #39).
+- The gateway image starts with a database: the Prisma client (`prisma==0.11.0`, the version
+  LiteLLM 1.106.2 ships), its CLI, query and schema engines and a digest-pinned Node.js are
+  baked in at build time, the client is generated from LiteLLM's schema, and LiteLLM's
+  migrations run from `/tmp` (`LITELLM_MIGRATION_DIR`), so nothing is downloaded at runtime and
+  the read-only root filesystem holds. CI now also boots the image read-only against Postgres 17
+  and checks that the migrations were applied, and that the Prisma CLI runs with no network.
+- The signing-key check no longer alerts every day: it compared a digest of every key Vault
+  publishes, including a built-in key that rotates daily. The broker now checks the `kid` of
+  each identity token against `wif.uploadedKids` (`wif_kid_not_uploaded`), and the hourly job
+  checks that every uploaded kid is still published (`missing_uploaded_kids`). The
+  `wif.jwksCheck.expectedSha256` value and its alerts are removed; ADR 0009 describes key
+  rotation.
+- The guard callback subclasses LiteLLM's CustomLogger so the proxy loads it; CI boots the proxy
+  with the real config as a smoke test; ExternalSecret defaults are explicit to avoid Argo CD
+  drift (refs #8).
+- First CI run: Checkov runs one framework per step, the rollout-wait script selects the
+  namespace literal by comparison (no tainted argv for SAST), and GitHub provenance
+  attestation is skipped while the repository is private; the gitleaks job can read PR
+  commits (refs #2).
+
