@@ -16,7 +16,7 @@
 # No gitleaks binary: upstream builds ship with an old Go toolchain and fail the Trivy
 # gate; the prompt hook is regex-only and the gateway's input guard is authoritative.
 
-FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac AS tools
+FROM ubuntu:26.04@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944 AS tools
 ARG NODE_VERSION=24.22.1
 ARG VAULT_VERSION=2.2.0
 # hadolint ignore=DL3008
@@ -41,7 +41,7 @@ RUN set -eu; \
     mkdir -p /opt/tools/bin; \
     unzip -q "${zip}" vault -d /opt/tools/bin
 
-FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
+FROM ubuntu:26.04@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944
 ARG VERSION=0.0.0
 ARG CLAUDE_CODE_VERSION=2.1.306
 # Site values rendered into the managed settings (defaults in image/workspace.env).
