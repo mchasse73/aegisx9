@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- The guard callback subclasses LiteLLM's CustomLogger so the proxy loads it; CI boots the proxy
+  with the real config as a smoke test; ExternalSecret defaults are explicit to avoid Argo CD
+  drift (refs #8).
+
 ### Added
 - Public-repository preparation: an `identifier check` CI job that fails on internal
   identifiers (generic patterns in the repo, organisation-specific ones only from a CI secret), and a log redaction filter used by

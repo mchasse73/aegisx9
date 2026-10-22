@@ -19,6 +19,16 @@ from aegisx9.pipeline import GuardPipeline, default_pipeline
 from aegisx9.policy import ModelPolicy, PolicyViolationError
 from aegisx9.signing import AuditSigner, sign_event
 
+# LiteLLM only loads a callback that is a CustomLogger instance or a callable. Subclass it
+# when LiteLLM is installed (the gateway image); fall back to object so the package stays
+# importable and testable without LiteLLM.
+try:
+    from litellm.integrations.custom_logger import (  # type: ignore[import-not-found,unused-ignore]
+        CustomLogger as _HookBase,
+    )
+except ImportError:  # pragma: no cover - exercised in the image smoke test
+    _HookBase = object  # type: ignore[assignment,misc,unused-ignore]
+
 audit_logger = logging.getLogger("aegisx9.audit")
 
 
@@ -48,13 +58,14 @@ def signed_audit_sink(signer: AuditSigner) -> Callable[[AuditEvent], None]:
     return _sink
 
 
-class AegisGuard:
+class AegisGuard(_HookBase):  # type: ignore[misc,valid-type,unused-ignore]
     def __init__(
         self,
         pipeline: GuardPipeline | None = None,
         policy: ModelPolicy | None = None,
         principal_salt: str = "",
     ) -> None:
+        super().__init__()
         self.pipeline = pipeline or default_pipeline(audit_sink=_log_audit)
         self.policy = policy
         self._salt = principal_salt
