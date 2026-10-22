@@ -32,25 +32,6 @@ spec:
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
-      {{- if or .Values.scheduling.avoidControlPlane .Values.scheduling.excludeNodeHostnames }}
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  {{- if .Values.scheduling.avoidControlPlane }}
-                  - key: node-role.kubernetes.io/control-plane
-                    operator: DoesNotExist
-                  {{- end }}
-                  {{- if .Values.scheduling.excludeNodeHostnames }}
-                  - key: kubernetes.io/hostname
-                    operator: NotIn
-                    values:
-                      {{- range .Values.scheduling.excludeNodeHostnames }}
-                      - {{ . | quote }}
-                      {{- end }}
-                  {{- end }}
-      {{- end }}
       containers:
         - name: gateway
           image: {{ include "aegisx9.image" . | quote }}
@@ -124,7 +105,18 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- $nodeExprs := list }}
+      {{- if .Values.scheduling.avoidControlPlane }}
+      {{- $nodeExprs = append $nodeExprs (dict "key" "node-role.kubernetes.io/control-plane" "operator" "DoesNotExist") }}
+      {{- end }}
+      {{- if .Values.scheduling.excludeNodeHostnames }}
+      {{- $nodeExprs = append $nodeExprs (dict "key" "kubernetes.io/hostname" "operator" "NotIn" "values" .Values.scheduling.excludeNodeHostnames) }}
+      {{- end }}
+      {{- $affinity := deepCopy (default dict .Values.affinity) }}
+      {{- if $nodeExprs }}
+      {{- $_ := set $affinity "nodeAffinity" (dict "requiredDuringSchedulingIgnoredDuringExecution" (dict "nodeSelectorTerms" (list (dict "matchExpressions" $nodeExprs)))) }}
+      {{- end }}
+      {{- with $affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
