@@ -90,6 +90,7 @@ variable "required_status_checks" {
   type        = list(string)
   default = [
     "lint, types, tests",
+    "identifier check",
     "gitleaks",
     "semgrep",
     "pip-audit",

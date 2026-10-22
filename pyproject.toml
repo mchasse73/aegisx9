@@ -43,8 +43,13 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "C4", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-mypy_path = "src"
-files = ["src/aegisx9", "workspace/breakglass/bin/handoff-sync", "workspace/breakglass/bin/aegisx9-event"]
+mypy_path = "src:scripts/ci"
+files = [
+  "src/aegisx9",
+  "scripts/ci",
+  "workspace/breakglass/bin/handoff-sync",
+  "workspace/breakglass/bin/aegisx9-event",
+]
 scripts_are_modules = true
 
 [tool.pytest.ini_options]

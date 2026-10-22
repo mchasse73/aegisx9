@@ -32,7 +32,7 @@ jobs:
           python3 redteam/wait_for_rollout.py --namespace aegisx9-prod --digest-file digest.txt
       - name: health checks
         env:
-          AEGIS_PROD_URL: ${{ vars.AEGIS_PROD_URL }}
+          AEGIS_PROD_URL: ${{ secrets.AEGIS_PROD_URL }} # a secret, not a variable: masked from the first log line
         run: |
           curl -fsS --max-time 10 "${AEGIS_PROD_URL}/health/liveliness" > /dev/null
           code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${AEGIS_PROD_URL}/v1/models")
