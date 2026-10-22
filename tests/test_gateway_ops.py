@@ -422,3 +422,83 @@ def test_main_uses_argv(monkeypatch: pytest.MonkeyPatch) -> None:
     assert ops.main() == 2
     logging.getLogger("aegisx9").handlers[:] = []
     logging.getLogger("aegisx9").propagate = True
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _refused(*_a, **_k):  # type: ignore[no-untyped-def]
+    import urllib.error
+
+    raise urllib.error.URLError(ConnectionRefusedError(111, "refused"))
+
+
+def test_urllib_request_retries_refused_connections_then_succeeds(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import io
+
+    from aegisx9 import gateway_ops
+
+    calls = {"n": 0}
+
+    class _Resp(io.BytesIO):
+        status = 200
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *a):  # type: ignore[no-untyped-def]
+            return False
+
+    def flaky(req, timeout, context):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] < 3:
+            _refused()
+        return _Resp(b'{"ok": true}')
+
+    clock = _FakeClock()
+    monkeypatch.setattr(gateway_ops.urllib.request, "urlopen", flaky)
+    req = gateway_ops.urllib_request(sleep=clock.sleep, clock=clock)
+    assert req("GET", "http://gw:4000/health", {}, None) == (200, {"ok": True})
+    assert calls["n"] == 3 and clock.now == 6.0
+
+
+def test_urllib_request_stops_at_the_deadline(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import urllib.error
+
+    import pytest
+
+    from aegisx9 import gateway_ops
+
+    clock = _FakeClock()
+    monkeypatch.setattr(gateway_ops.urllib.request, "urlopen", _refused)
+    req = gateway_ops.urllib_request(connect_retry_seconds=15.0, sleep=clock.sleep, clock=clock)
+    with pytest.raises(urllib.error.URLError):
+        req("GET", "http://gw:4000/health", {}, None)
+    assert clock.now <= 15.0
+
+
+def test_urllib_request_does_not_retry_timeouts_or_replay_writes(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import pytest
+
+    from aegisx9 import gateway_ops
+
+    calls = {"n": 0}
+
+    def timed_out(req, timeout, context):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        raise TimeoutError("read timed out")
+
+    clock = _FakeClock()
+    monkeypatch.setattr(gateway_ops.urllib.request, "urlopen", timed_out)
+    req = gateway_ops.urllib_request(sleep=clock.sleep, clock=clock)
+    with pytest.raises(TimeoutError):
+        req("POST", "http://gw:4000/team/new", {}, b"{}")
+    assert calls["n"] == 1 and clock.now == 0.0

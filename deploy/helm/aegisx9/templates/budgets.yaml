@@ -47,6 +47,9 @@ spec:
       restartPolicy: Never
       serviceAccountName: {{ include "aegisx9.serviceAccountName" . }}
       automountServiceAccountToken: false
+      {{- with .Values.opsJobs.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       securityContext:
         {{- include "aegisx9.podSecurityContext" . | nindent 8 }}
       containers:
@@ -94,6 +97,9 @@ spec:
           restartPolicy: Never
           serviceAccountName: {{ include "aegisx9.serviceAccountName" . }}
           automountServiceAccountToken: false
+          {{- with .Values.opsJobs.priorityClassName }}
+          priorityClassName: {{ . }}
+          {{- end }}
           securityContext:
             {{- include "aegisx9.podSecurityContext" . | nindent 12 }}
           containers:
