@@ -12,6 +12,19 @@ All notable changes to this project are documented here. The format follows
   drift (refs #8).
 
 ### Added
+- Anthropic through Workload Identity Federation, with no static provider key (ADR 0009):
+  `aegisx9.wif_broker` sidecar that logs in to Vault with the pod's service-account token,
+  reads a fresh Vault-signed identity token for every exchange, keeps a short-lived
+  Anthropic access token and serves a loopback-only proxy for LiteLLM (credential
+  replacement, path allowlist, unbuffered SSE, `/healthz`); chart values `wif.*`. Staging
+  activation (models `claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-opus-5-5` via the
+  broker) follows with the promotion of a signed image that contains it (refs #53).
+- Spend caps: proxy-wide budget $180 per 30 days in staging and per-consumer LiteLLM teams
+  (`public-chat` $20, `staging-tests` $30, `developers` $25 per member) kept in sync by a
+  PostSync Job; spend-check CronJob (whenever a proxy budget is set, with or without teams)
+  and Loki alerts at 50/80/100 %; broker no-token alert; hourly check of Vault's OIDC
+  signing keys against the federation issuer. The jobs are behind
+  `gateway.budgets.jobs.enabled` until that image is promoted (refs #53).
 - Public-repository preparation: an `identifier check` CI job that fails on internal
   identifiers (generic patterns in the repo, organisation-specific ones only from a CI secret), and a log redaction filter used by
   the self-hosted workflows so Terraform plan bodies and internal URLs stay out of public

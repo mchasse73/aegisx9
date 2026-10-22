@@ -1,0 +1,76 @@
+{{- if and .Values.wif.enabled .Values.wif.jwksCheck.enabled }}
+{{- $fullname := include "aegisx9.fullname" . }}
+# The Anthropic federation issuer holds Vault's OIDC signing keys inline. When Vault
+# rotates them every exchange fails until the issuer is updated, so this job compares the
+# digest of Vault's public keys (unauthenticated identity/oidc/.well-known/keys) with the
+# configured one and logs an aegisx9_jwks_check line that the Loki rules alert on.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ $fullname }}-jwks-check
+  labels:
+    {{- include "aegisx9.labels" . | nindent 4 }}
+  annotations:
+    checkov.io/skip1: CKV_K8S_31=seccomp RuntimeDefault is set at pod and container level; the pinned Checkov does not detect it on Job/CronJob
+spec:
+  schedule: {{ .Values.wif.jwksCheck.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "aegisx9.opsSelectorLabels" . | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "aegisx9.serviceAccountName" . }}
+          automountServiceAccountToken: false
+          securityContext:
+            {{- include "aegisx9.podSecurityContext" . | nindent 12 }}
+          containers:
+            - name: check-jwks
+              image: {{ include "aegisx9.image" . | quote }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["python", "-m", "aegisx9.gateway_ops", "check-jwks"]
+              env:
+                {{- if .Values.wif.vaultAddr }}
+                - name: VAULT_ADDR
+                  value: {{ .Values.wif.vaultAddr | quote }}
+                {{- else }}
+                - name: VAULT_ADDR
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.existingSecret }}
+                      key: VAULT_ADDR
+                {{- end }}
+                {{- if .Values.wif.vaultCaSecretKey }}
+                - name: VAULT_CACERT
+                  value: /etc/aegisx9-vault-ca/ca.crt
+                {{- end }}
+                - name: AEGISX9_JWKS_EXPECTED_SHA256
+                  value: {{ .Values.wif.jwksCheck.expectedSha256 | quote }}
+              securityContext:
+                {{- include "aegisx9.containerSecurityContext" . | nindent 16 }}
+              resources:
+                {{- toYaml .Values.gateway.budgets.jobs.resources | nindent 16 }}
+              {{- if .Values.wif.vaultCaSecretKey }}
+              volumeMounts:
+                - name: vault-ca
+                  mountPath: /etc/aegisx9-vault-ca
+                  readOnly: true
+              {{- end }}
+          {{- with .Values.wif.vaultCaSecretKey }}
+          volumes:
+            - name: vault-ca
+              secret:
+                secretName: {{ $.Values.existingSecret }}
+                defaultMode: 0440
+                items:
+                  - key: {{ . }}
+                    path: ca.crt
+          {{- end }}
+{{- end }}
