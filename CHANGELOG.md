@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- infra-apply runs only when the repository variable `INFRA_APPLY_ENABLED` is `true`, until the
+  Terraform Enterprise workspaces and token exist (refs #17).
+
 ### Fixed
 - The guard callback subclasses LiteLLM's CustomLogger so the proxy loads it; CI boots the proxy
   with the real config as a smoke test; ExternalSecret defaults are explicit to avoid Argo CD
