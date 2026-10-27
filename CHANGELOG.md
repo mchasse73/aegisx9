@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- CI: pip-audit and the gateway image Trivy scans read one documented ignore list
+  (`.trivyignore`). It holds three filelock advisories that don't apply to the gateway
+  and can't be fixed while LiteLLM requires filelock<4.0; removed once it allows 4.2.1.
+  The workspace image ignores the undici advisory in Node.js 24.22.1's bundled copy until
+  the next Node 24 LTS release (closes #88).
+
 ## [0.2.0] - 2026-10-22
 
 ### Added
