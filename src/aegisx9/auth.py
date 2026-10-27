@@ -245,7 +245,7 @@ class JwksCache:
             document = json.loads(
                 self.fetch(self.issuer.jwks_url, JWKS_TIMEOUT_S, self.issuer.ca_file)
             )
-            keys = {}
+            parsed: dict[str, SigningKey] = {}
             for entry in document.get("keys", []) if isinstance(document, dict) else []:
                 if not isinstance(entry, dict) or entry.get("use", "sig") != "sig":
                     continue
@@ -253,9 +253,13 @@ class JwksCache:
                 if not isinstance(kid, str) or not kid:
                     continue
                 try:
-                    keys[kid] = _signing_key(entry)
+                    parsed[kid] = _signing_key(entry)
                 except jwt.PyJWTError:
                     continue  # unsupported key type or algorithm: skip it, keep the others
+            if not parsed:
+                raise ValueError("no usable keys")
+            # Only a complete, non-empty document replaces the last good keys.
+            keys = parsed
         except Exception as e:  # any fetch or parse failure is the same outcome
             logger.warning(
                 "jwks fetch failed issuer=%s error=%s",

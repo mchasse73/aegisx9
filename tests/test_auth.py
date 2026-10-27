@@ -35,6 +35,7 @@ class Keys:
         self.extra: list[dict[str, Any]] = []
         self.fetches = 0
         self.fail = False
+        self.document: Any = None  # when set, served instead of the real JWKS
 
     def jwks(self) -> dict[str, Any]:
         r = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(self.rsa.public_key()))
@@ -45,7 +46,7 @@ class Keys:
         self.fetches += 1
         if self.fail:
             raise OSError("down")
-        return json.dumps(self.jwks()).encode()
+        return json.dumps(self.jwks() if self.document is None else self.document).encode()
 
 
 def issuer(**kw: Any) -> IssuerConfig:
@@ -383,6 +384,18 @@ def test_jwks_outage_keeps_last_good_keys_with_backoff(keys: Keys, clock: Clock)
     assert keys.fetches == 3
 
 
+@pytest.mark.parametrize(
+    "document", [{"keys": None}, {"keys": []}, {"keys": [{"kid": "x", "kty": "nope"}]}, []]
+)
+def test_jwks_bad_document_keeps_last_good_keys(keys: Keys, clock: Clock, document: Any) -> None:
+    v = verifier(keys, clock)
+    v.verify(sign(keys, claims()))
+    keys.document = document
+    clock.mono += auth.JWKS_TTL_S
+    assert v.verify(sign(keys, claims())).user_id == "idp:alice"
+    assert keys.fetches == 2
+
+
 def test_jwks_last_good_keys_expire_after_max_staleness(keys: Keys, clock: Clock) -> None:
     v = verifier(keys, clock)
     v.verify(sign(keys, claims()))
@@ -462,7 +475,8 @@ def test_jwks_skips_unusable_entries(keys: Keys, clock: Clock) -> None:
 
 def test_jwks_document_not_an_object(clock: Clock) -> None:
     v = Verifier([issuer()], fetch=lambda *_: b"[]", now=clock.now, monotonic=clock.monotonic)
-    assert _reason(v, sign(Keys(), claims())) == "unknown_kid"
+    # Never a usable document, so no keys at all: the issuer is unavailable (still a 401).
+    assert _reason(v, sign(Keys(), claims())) == "jwks_unavailable"
 
 
 # --- configuration -----------------------------------------------------------------------

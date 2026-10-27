@@ -159,6 +159,14 @@ def _fake_handler(fake: FakeLiteLLM) -> type[BaseHTTPRequestHandler]:
                 for part in (b"ab", b"cd"):
                     self.wfile.write(f"{len(part):x}\r\n".encode() + part + b"\r\n")
                 self.wfile.write(b"0\r\n\r\n")
+            elif self.path == "/short":
+                # Declares more than it sends, then closes.
+                self.send_response(200)
+                self.send_header("content-length", "100")
+                self.end_headers()
+                self.wfile.write(b"abc")
+                self.wfile.flush()
+                self.close_connection = True
             elif self.path == "/broken":
                 # A chunked body cut off mid-chunk.
                 self.send_response(200)
@@ -849,6 +857,21 @@ def test_interrupted_stream_closes_connection(
     assert any(r.getMessage() == "stream interrupted" for r in caplog.records)
 
 
+def test_short_fixed_length_response_drops_client(
+    proxy: Proxy, caplog: pytest.LogCaptureFixture
+) -> None:
+    with (
+        caplog.at_level(logging.INFO, logger="aegisx9.auth_proxy"),
+        socket.create_connection(("127.0.0.1", proxy.port), timeout=5) as s,
+    ):
+        s.sendall(b"GET /short HTTP/1.1\r\nHost: a\r\n\r\n")
+        out = b""
+        while chunk := s.recv(65536):  # returns at EOF, not at the 5 s timeout
+            out += chunk
+    assert out.startswith(b"HTTP/1.1 200") and out.endswith(b"abc")
+    assert any(r.getMessage() == "stream interrupted" for r in caplog.records)
+
+
 def test_upstream_down_is_502(keys: Keys) -> None:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -904,6 +927,33 @@ class FakeAdmin:
         if path == ap.KEY_GENERATE_PATH:
             return 200, {"key": secrets.token_urlsafe(16)}
         return 200, None
+
+
+@dataclass
+class SlowAdmin(FakeAdmin):
+    """Each admin call advances the exchanger's clock, like a slow LiteLLM."""
+
+    clock: list[float] = field(default_factory=lambda: [1000.0])
+    slow_path: str = ""
+    step: float = 0.0
+
+    def __call__(self, path: str, payload: Any) -> tuple[int, Any]:
+        if path == self.slow_path:
+            self.clock[0] += self.step
+        return super().__call__(path, payload)
+
+
+@pytest.mark.parametrize(
+    ("slow_path", "mints"), [(ap.TEAM_MEMBER_ADD_PATH, 0), (ap.KEY_GENERATE_PATH, 1)]
+)
+def test_exchange_outlasting_token_refused(slow_path: str, mints: int) -> None:
+    # 10 s left: a slow enrolment leaves too little to mint; a slow mint returns a key
+    # that would only be used after the token expired.
+    admin = SlowAdmin(slow_path=slow_path, step=5.0 if mints == 0 else 9.0)
+    ex = ap.KeyExchanger(admin, now=lambda: admin.clock[0])
+    with pytest.raises(ap.TokenExpiringError):
+        ex.key_for("t", _principal(expires_at=1010.0))
+    assert admin.calls.count(ap.KEY_GENERATE_PATH) == mints
 
 
 def _principal(user: str = "idp:u", expires_at: float = 2000.0) -> Principal:

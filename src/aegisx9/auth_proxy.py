@@ -332,9 +332,12 @@ class KeyExchanger:
     def __repr__(self) -> str:
         return f"KeyExchanger(cached={len(self._keys)})"
 
-    def key_for(self, token: str, principal: Principal) -> str:
+    def _check_remaining(self, principal: Principal) -> None:
         if principal.expires_at - self._now() < MIN_KEY_LIFETIME_S + KEY_EXPIRY_MARGIN_S:
             raise TokenExpiringError
+
+    def key_for(self, token: str, principal: Principal) -> str:
+        self._check_remaining(principal)
         digest = hashlib.sha256(token.encode()).hexdigest()
         cached = self._cached(digest)
         if cached is not None:
@@ -345,6 +348,8 @@ class KeyExchanger:
             if cached is not None:
                 return cached
             self._enrol(member)
+            # Waiting for the lock and enrolling take time: check the lifetime again.
+            self._check_remaining(principal)
             try:
                 key = self._mint(principal)
             except BackendError:
@@ -352,6 +357,9 @@ class KeyExchanger:
                 with self._lock:
                     self._enrolled.pop(member, None)
                 raise
+            if self._now() >= key.expires_at:
+                # The admin call outlasted the token: never forward a key that has expired.
+                raise TokenExpiringError
             self._store(digest, key)
             return key.value
 
@@ -652,12 +660,18 @@ def make_handler(
                 self.close_connection = True
             self.end_headers()
             self.wfile.flush()
+            expected = int(length) if length is not None and length.isdigit() else None
+            sent = 0
             while True:
                 chunk = resp.read1(CHUNK_BYTES)
                 if not chunk:
                     break
                 self.wfile.write(chunk)
                 self.wfile.flush()
+                sent += len(chunk)
+            if expected is not None and not chunked and sent < expected:
+                # LiteLLM closed early: drop the client too instead of leaving it waiting.
+                raise http.client.IncompleteRead(b"", expected - sent)
 
     return Handler
 
