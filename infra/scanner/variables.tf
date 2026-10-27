@@ -38,9 +38,13 @@ variable "instance_type" {
 }
 
 variable "volume_size" {
-  description = "Root volume size in GiB (nuclei templates and reports need room)."
+  description = "Root volume size in GiB. The red-team toolchain (garak, CPU-only torch, Node.js), nuclei templates, reports and patches need room; 16 GiB filled up during bootstrap."
   type        = number
-  default     = 16
+  default     = 30
+  validation {
+    condition     = var.volume_size >= 30
+    error_message = "volume_size must be at least 30 GiB (the red-team toolchain does not fit in less)."
+  }
 }
 
 variable "detailed_monitoring" {
@@ -94,9 +98,22 @@ variable "nuclei_version" {
 }
 
 variable "scanner_package_ref" {
-  description = "Git tag (or release ref) of this repository the scanner package is installed from."
+  description = "Release tag (vX.Y.Z) or full 40-character commit SHA of this repository that the scanner package, its systemd units and the red-team suites are installed from. Required: it must name a release that contains the bootstrap and unit fixes of issue #96 (no earlier tag boots cleanly)."
   type        = string
-  default     = "v0.1.0"
+  validation {
+    condition     = can(regex("^(v[0-9]+\\.[0-9]+\\.[0-9]+|[0-9a-f]{40})$", var.scanner_package_ref))
+    error_message = "scanner_package_ref must be a vX.Y.Z release tag or a 40-character lowercase commit SHA."
+  }
+}
+
+variable "torch_version" {
+  description = "torch release installed from the CPU-only wheel index before garak, so pip never pulls the multi-gigabyte CUDA build."
+  type        = string
+  default     = "2.14.1"
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.torch_version))
+    error_message = "torch_version must be X.Y.Z."
+  }
 }
 
 variable "redteam_target_url" {

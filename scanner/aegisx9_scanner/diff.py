@@ -127,7 +127,7 @@ def classify(
     prev_scanned = bool(previous and previous.get("ports_scanned"))
 
     if obs.targets is not None:
-        alerts.extend(_refusals(obs.targets.refused))
+        alerts.extend(refusal_alerts(obs.targets.refused))
 
     for entry in registry.expired(today):
         alerts.append(
@@ -301,11 +301,15 @@ def uptime_alerts(results: list[UptimeResult]) -> list[Alert]:
     return alerts
 
 
-def _refusals(refused: list[Refusal]) -> list[Alert]:
+def refusal_alerts(refused: list[Refusal]) -> list[Alert]:
+    """Never-target refusals are informational. The registry can name a never-target on
+    purpose (a live-trading host is public but must never be scanned), so a refusal on
+    its own must not turn every run into an ALERT; it stays in the report so a genuine
+    configuration mistake is still visible."""
     return [
         Alert(
             Kind.REFUSED_TARGET,
-            Severity.HIGH,
+            Severity.INFO,
             r.name,
             f"{r.source} names a never-target ({r.rule}); it was not scanned. Fix the config.",
         )

@@ -122,7 +122,7 @@ def test_classify_other_checks(
     later = date(2027, 6, 1)
     alerts = classify(obs, registry, None, today=later, cert_warn_days=14)
     kinds = [(a.kind, a.severity, a.target) for a in alerts]
-    assert (Kind.REFUSED_TARGET, Severity.HIGH, "trading.example.com") in kinds
+    assert (Kind.REFUSED_TARGET, Severity.INFO, "trading.example.com") in kinds
     assert (Kind.EXPIRED_APPROVAL, Severity.MEDIUM, "gateway.example.com") in kinds
     assert (Kind.CERT_EXPIRING, Severity.HIGH, "www.example.com:443") in kinds
     assert (Kind.CERT_EXPIRING, Severity.MEDIUM, "gateway.example.com:443") in kinds

@@ -2,12 +2,14 @@
 - name: Validate role inputs
   ansible.builtin.assert:
     that:
-      - scanner_package_ref is match('^v[0-9]+\.[0-9]+\.[0-9]+$')
+      - scanner_package_ref is match('^(v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{40})$')
+      - scanner_torch_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
       - scanner_approved_registry_path | length > 0
       - scanner_targets is mapping
       - scanner_never_target is mapping
     fail_msg: >-
-      scanner_package_ref must be a vX.Y.Z tag, scanner_approved_registry_path must point at
+      scanner_package_ref must be a vX.Y.Z release tag or a full commit SHA (a release
+      containing the #96 fixes), scanner_approved_registry_path must point at
       the approved-exposure registry from the platform operations checkout, and
       scanner_targets / scanner_never_target must be mappings
     quiet: true
@@ -42,13 +44,49 @@
 - name: Flush handlers so the user and directories exist before the package install
   ansible.builtin.meta: flush_handlers
 
-- name: Install or update the scanner package at the pinned tag (plus garak for the red-team unit)
+- name: Require the signature-verified AWS CLI v2 installed by cloud-init
+  # The secrets fetcher needs it. Ubuntu 24.04 has no awscli package and the snap cannot
+  # run inside the fetcher's sandbox (NoNewPrivileges, RestrictNamespaces), so only the
+  # official installer at /usr/local/bin/aws is accepted (infra/scanner/cloud-init.sh.tftpl).
+  ansible.builtin.stat:
+    path: /usr/local/bin/aws
+  register: scanner_aws_cli
+
+- name: Fail when the AWS CLI is missing
+  ansible.builtin.assert:
+    that:
+      - scanner_aws_cli.stat.exists
+    fail_msg: >-
+      /usr/local/bin/aws is missing: install the AWS CLI v2 from the official, signature-verified
+      zip (as the cloud-init bootstrap does), not the snap
+    quiet: true
+
+- name: Install torch from the CPU-only index (before garak, which depends on it)
   ansible.builtin.pip:
     name:
-      - "git+https://github.com/mchasse73/aegisx9@{{ scanner_package_ref }}#egg=aegisx9[scanner]"
-      - "garak=={{ scanner_garak_version }}"
+      - "torch=={{ scanner_torch_version }}"
     virtualenv: "{{ scanner_venv }}"
     virtualenv_command: python3 -m venv
+    extra_args: "--no-cache-dir --index-url {{ scanner_torch_index_url }}"
+    state: present
+
+- name: Install the scanner's dependencies and garak (the CPU torch already satisfies the pin)
+  ansible.builtin.pip:
+    name:
+      # PEP 508 direct reference: pip rejects extras in a #egg= fragment.
+      - "aegisx9[scanner] @ git+https://github.com/mchasse73/aegisx9@{{ scanner_package_ref }}"
+      - "garak=={{ scanner_garak_version }}"
+      - "torch=={{ scanner_torch_version }}"
+    virtualenv: "{{ scanner_venv }}"
+    extra_args: --no-cache-dir
+    state: present
+
+- name: Reinstall the scanner package itself at the pinned ref (no dependencies, so torch stays CPU-only)
+  ansible.builtin.pip:
+    name:
+      - "aegisx9[scanner] @ git+https://github.com/mchasse73/aegisx9@{{ scanner_package_ref }}"
+    virtualenv: "{{ scanner_venv }}"
+    extra_args: --no-cache-dir --no-deps
     state: forcereinstall
 
 - name: Install the red-team suites (promptfoo and garak configs) from the project checkout

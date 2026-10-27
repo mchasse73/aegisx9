@@ -11,6 +11,7 @@ from aegisx9_scanner.checks.http_exposure import HttpResponse
 from aegisx9_scanner.checks.tls import TlsResult
 from aegisx9_scanner.diff import Alert, Kind, Severity
 from aegisx9_scanner.redteam_external import RedteamOutcome
+from aegisx9_scanner.report import Report
 from conftest import fake_resolver
 
 RESOLVE = fake_resolver(
@@ -113,8 +114,10 @@ def test_daily_full_run_with_fakes(
     )
     sent: list[dict[str, object]] = []
 
-    def fake_notify(report: object, md: str, cfg: object, env: dict[str, str]) -> dict[str, bool]:
-        sent.append({"event": getattr(report, "event_type")})  # noqa: B009
+    def fake_notify(
+        report: object, md: str, cfg: object, env: dict[str, str], reason: str = ""
+    ) -> dict[str, bool]:
+        sent.append({"event": getattr(report, "event_type"), "reason": reason})  # noqa: B009
         return {"webhook": True, "email": False}
 
     monkeypatch.setattr(cli, "notify", fake_notify)
@@ -123,7 +126,7 @@ def test_daily_full_run_with_fakes(
         _args(config_dir, state_dir, "daily"), env={"AEGISX9_SCANNER_ALERT_MIN_SEVERITY": "medium"}
     )
     assert rc == cli.EXIT_ALERTS
-    assert sent == [{"event": "exposure_change"}]
+    assert sent == [{"event": "exposure_change", "reason": "summary"}]
     # nmap got validated addresses and networks, never a hostname.
     scanned = nmap_calls[0]
     assert "203.0.113.10" in scanned and "203.0.113.0/27" in scanned
@@ -154,6 +157,8 @@ def test_daily_full_run_with_fakes(
     last = json.loads((state_dir / "last_report.json").read_text())
     port = next(a for a in last["alerts"] if a["kind"] == "NEW_OPEN_PORT")
     assert rc == cli.EXIT_ALERTS and port["severity"] == "medium"
+    # The daily scan is the heartbeat: it sends a summary every run, even unchanged.
+    assert [s["reason"] for s in sent] == ["summary", "summary"]
     assert last["run_id"] != snap.get("run_id")
 
 
@@ -166,18 +171,76 @@ def test_uptime_run(config_dir: Path, state_dir: Path, monkeypatch: pytest.Monke
         return HttpResponse(200 if "www" in url else 503, {}, b"")
 
     monkeypatch.setattr(cli.uptime, "fetch", fetch)
-    sent: list[str] = []
-    monkeypatch.setattr(
-        cli, "notify", lambda report, md, cfg, env: sent.append(report.event_type) or {}
-    )
+    sent: list[tuple[str, str]] = []
+
+    def fake_notify(
+        report: Report, md: str, cfg: object, env: dict[str, str], reason: str = ""
+    ) -> dict[str, bool]:
+        sent.append((report.event_type, reason))
+        return {"webhook": True, "email": False}
+
+    monkeypatch.setattr(cli, "notify", fake_notify)
     assert cli.main(_args(config_dir, state_dir, "uptime"), env={}) == cli.EXIT_ALERTS
-    assert sent == ["down"] and pinned == ["203.0.113.10", "203.0.113.11"]
+    assert sent == [("down", "alert")] and pinned == ["203.0.113.10", "203.0.113.11"]
     assert not (state_dir / "snapshot.json").exists()
+    # The same failure five minutes later is not sent again (the alert flood, #96).
+    assert cli.main(_args(config_dir, state_dir, "uptime"), env={}) == cli.EXIT_ALERTS
+    assert sent == [("down", "alert")]
     monkeypatch.setattr(
         cli.uptime, "fetch", lambda url, timeout, address="": HttpResponse(200, {}, b"")
     )
+    # Recovery is announced once; a clean run after a clean run is silent.
     assert cli.main(_args(config_dir, state_dir, "uptime"), env={}) == cli.EXIT_CLEAN
-    assert sent[-1] == "clean"
+    assert sent[-1] == ("clean", "recovered")
+    assert cli.main(_args(config_dir, state_dir, "uptime"), env={}) == cli.EXIT_CLEAN
+    assert len(sent) == 2
+
+
+def test_undelivered_notice_is_retried(
+    config_dir: Path, state_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A notice no channel accepted is not remembered as sent."""
+    monkeypatch.setattr(cli, "resolve", RESOLVE)
+    monkeypatch.setattr(
+        cli.uptime, "fetch", lambda url, timeout, address="": HttpResponse(503, {}, b"")
+    )
+    sent: list[str] = []
+
+    def failing(
+        report: Report, md: str, cfg: object, env: dict[str, str], reason: str = ""
+    ) -> dict[str, bool]:
+        sent.append(reason)
+        return {"webhook": False, "email": False}
+
+    monkeypatch.setattr(cli, "notify", failing)
+    cli.main(_args(config_dir, state_dir, "uptime"), env={})
+    cli.main(_args(config_dir, state_dir, "uptime"), env={})
+    assert sent == ["alert", "alert"]
+    assert not (state_dir / "notify" / "uptime.json").exists()
+
+
+def test_uptime_refusals_alone_do_not_alert(
+    config_dir: Path, state_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A never-target named in the configuration is reported, not alerted: with the
+    real registry some names are on the never-target list by design (#96)."""
+    (config_dir / "targets.yml").write_text(
+        "uptime:\n  - url: https://www.example.com/\n  - url: https://trading.example.com/\n"
+    )
+    monkeypatch.setattr(cli, "resolve", RESOLVE)
+    monkeypatch.setattr(
+        cli.uptime, "fetch", lambda url, timeout, address="": HttpResponse(200, {}, b"")
+    )
+    sent: list[str] = []
+    monkeypatch.setattr(
+        cli, "notify", lambda report, md, cfg, env, reason="": sent.append(reason) or {}
+    )
+    assert cli.main(_args(config_dir, state_dir, "uptime"), env={}) == cli.EXIT_CLEAN
+    last = json.loads((state_dir / "last_report.json").read_text())
+    assert last["clean"] and last["refused_count"] >= 1 and last["alerts"] == []
+    refused = {a["target"] for a in last["informational"] if a["kind"] == "REFUSED_TARGET"}
+    assert "trading.example.com" in refused
+    assert sent == []
 
 
 def test_redteam_run(
@@ -187,7 +250,7 @@ def test_redteam_run(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(cli, "resolve", RESOLVE)
-    monkeypatch.setattr(cli, "notify", lambda report, md, cfg, env: {})
+    monkeypatch.setattr(cli, "notify", lambda report, md, cfg, env, reason="": {})
     # No target: nothing to do, exit clean (the timer must not page anyone).
     assert cli.main(_args(config_dir, state_dir, "redteam"), env={}) == cli.EXIT_CLEAN
     # A never-target is refused before anything runs.

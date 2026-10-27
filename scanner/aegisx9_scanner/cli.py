@@ -18,16 +18,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from aegisx9_scanner import __version__
+from aegisx9_scanner import __version__, alert_state
 from aegisx9_scanner.approved import Registry, RegistryError, load_registry
 from aegisx9_scanner.checks import dns as dns_check
 from aegisx9_scanner.checks import http_exposure, nuclei, ports, tls, uptime
 from aegisx9_scanner.diff import (
     Alert,
-    Kind,
     Observation,
     Severity,
     classify,
+    refusal_alerts,
     snapshot_from,
     uptime_alerts,
 )
@@ -201,7 +201,7 @@ def _run(
             expect_port_scan=not args.dry_run,
         )
         if mode == "daily"
-        else [*uptime_alerts(obs.uptime), *_refusal_alerts(targets)]
+        else [*uptime_alerts(obs.uptime), *refusal_alerts(targets.refused)]
     )
     report = Report(
         mode=mode,
@@ -218,18 +218,6 @@ def _run(
         dry_run=args.dry_run,
     )
     return _finish(report, obs, args, env, save=(mode == "daily" and not args.dry_run))
-
-
-def _refusal_alerts(targets: TargetSet) -> list[Alert]:
-    return [
-        Alert(
-            Kind.REFUSED_TARGET,
-            Severity.HIGH,
-            r.name,
-            f"{r.source} names a never-target ({r.rule})",
-        )
-        for r in targets.refused
-    ]
 
 
 def _daily(obs: Observation, targets: TargetSet, args: argparse.Namespace, cfg: Config) -> None:
@@ -327,8 +315,14 @@ def _finish(
     if args.dry_run:
         sys.stdout.write(markdown)
     else:
-        delivered = notify(report, markdown, NotifyConfig.from_env(env), env=env)
-        event("notifications", **delivered)
+        decision = alert_state.gate(report, args.state, now=report.finished_at)
+        if decision.send:
+            delivered = notify(
+                report, markdown, NotifyConfig.from_env(env), env=env, reason=decision.reason
+            )
+            event("notifications", reason=decision.reason, **delivered)
+            if any(delivered.values()):
+                alert_state.record(report, args.state, now=report.finished_at)
     event(
         "run finished",
         mode=report.mode,
