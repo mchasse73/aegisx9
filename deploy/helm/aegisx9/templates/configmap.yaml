@@ -42,10 +42,18 @@ data:
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
       disable_spend_logs: false
-      {{- if .Values.gateway.oidc.enabled }}
-      enable_jwt_auth: true
-      litellm_jwtauth:
-        user_id_jwt_field: {{ .Values.gateway.oidc.userIdClaim | quote }}
-        team_ids_jwt_field: {{ .Values.gateway.oidc.teamIdClaim | quote }}
-        user_id_upsert: true
-      {{- end }}
+  {{- if .Values.gateway.oidc.enabled }}
+  {{- if not .Values.gateway.oidc.issuers }}
+  {{- fail "gateway.oidc.enabled needs at least one entry in gateway.oidc.issuers" }}
+  {{- end }}
+  {{- range .Values.gateway.oidc.issuers }}
+  {{- if hasKey . "maxLifetimeSeconds" }}
+  {{- $l := int .maxLifetimeSeconds }}
+  {{- if or (lt $l 1) (gt $l 900) }}
+  {{- fail "gateway.oidc.issuers[].maxLifetimeSeconds must be 1..900 (short-lived tokens only)" }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  auth.json: |
+    {{- dict "issuers" .Values.gateway.oidc.issuers | toJson | nindent 4 }}
+  {{- end }}

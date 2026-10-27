@@ -6,3 +6,6 @@ litellm[proxy]==1.106.2
 prisma==0.11.0
 opentelemetry-sdk==1.45.1
 opentelemetry-exporter-otlp-proto-http==1.45.1
+# JWT verification in aegisx9.auth (custom_auth hook, ADR 0010). LiteLLM[proxy] allows these.
+pyjwt[crypto]==2.15.1
+cryptography==50.0.2

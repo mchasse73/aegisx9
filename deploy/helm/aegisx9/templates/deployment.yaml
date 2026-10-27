@@ -31,24 +31,19 @@ spec:
         - name: gateway
           image: {{ include "aegisx9.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.gateway.oidc.enabled }}
+          # Behind the auth sidecar (ADR 0010): loopback only, so every caller passes it.
+          args: ["--config", "/etc/aegisx9/config.yaml", "--host", "127.0.0.1", "--port", "{{ .Values.gateway.oidc.loopbackPort }}"]
+          {{- else }}
           args: ["--config", "/etc/aegisx9/config.yaml", "--port", "{{ .Values.service.port }}"]
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+          {{- end }}
           env:
             - name: HOME
               value: /tmp
-            {{- if .Values.gateway.oidc.enabled }}
-            {{- /* When jwksUrl is empty the URL comes from the existing Secret (envFrom below),
-                   so identity-provider details never need to be committed. */}}
-            {{- if .Values.gateway.oidc.jwksUrl }}
-            - name: JWT_PUBLIC_KEY_URL
-              value: {{ .Values.gateway.oidc.jwksUrl | quote }}
-            {{- end }}
-            - name: JWT_AUDIENCE
-              value: {{ .Values.gateway.oidc.audience | quote }}
-            {{- end }}
             {{- if .Values.gateway.otel.enabled }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.gateway.otel.endpoint | quote }}
@@ -60,6 +55,28 @@ spec:
                 name: {{ .Values.existingSecret }}
           securityContext:
             {{- include "aegisx9.containerSecurityContext" . | nindent 12 }}
+          {{- if .Values.gateway.oidc.enabled }}
+          # Exec probes: the listener is bound to 127.0.0.1 and the kubelet probes the pod IP.
+          # The sidecar's readiness probe reaches /health/readiness through the sidecar.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:{{ .Values.gateway.oidc.loopbackPort }}/health/liveliness', timeout=4)"
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:{{ .Values.gateway.oidc.loopbackPort }}/health/readiness', timeout=4)"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          {{- else }}
           livenessProbe:
             httpGet:
               path: /health/liveliness
@@ -72,6 +89,7 @@ spec:
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
@@ -80,6 +98,71 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+        {{- if .Values.gateway.oidc.enabled }}
+        # Auth sidecar (ADR 0010): owns the service port. Non-JWT bearers pass through to
+        # LiteLLM unchanged; a short-lived JWT is verified and exchanged for a LiteLLM
+        # virtual key that expires with it. It gets only the Secret keys it needs.
+        - name: auth
+          image: {{ include "aegisx9.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "aegisx9.auth_proxy"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: AEGISX9_AUTH_LISTEN_PORT
+              value: {{ .Values.service.port | quote }}
+            - name: AEGISX9_AUTH_UPSTREAM
+              value: "http://127.0.0.1:{{ .Values.gateway.oidc.loopbackPort }}"
+            - name: AEGISX9_AUTH_CONFIG
+              value: /etc/aegisx9/auth.json
+            {{- with .Values.gateway.oidc.trustedProxies }}
+            - name: AEGISX9_AUTH_TRUSTED_PROXIES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: LITELLM_MASTER_KEY
+            {{- /* Issuer and JWKS URLs come from the Secret by name, so identity-provider
+                   details never need to be committed. */}}
+            {{- $names := dict }}
+            {{- range .Values.gateway.oidc.issuers }}
+            {{- if .issuerEnv }}{{ $_ := set $names .issuerEnv true }}{{ end }}
+            {{- if .jwksUrlEnv }}{{ $_ := set $names .jwksUrlEnv true }}{{ end }}
+            {{- end }}
+            {{- range $name, $_ := $names }}
+            - name: {{ $name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.existingSecret }}
+                  key: {{ $name }}
+            {{- end }}
+          securityContext:
+            {{- include "aegisx9.containerSecurityContext" . | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.gateway.oidc.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/aegisx9
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+        {{- end }}
         {{- if .Values.wif.enabled }}
         # Anthropic Workload Identity Federation broker (ADR 0009). It alone logs in to
         # Vault, fetches a fresh Vault-signed identity token per exchange and holds the
