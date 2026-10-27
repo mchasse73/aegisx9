@@ -114,7 +114,12 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: pip install "pip-audit==${PIP_AUDIT_VERSION}"
       - name: audit runtime requirements
-        run: pip-audit --strict -r requirements/runtime.txt
+        # Documented exceptions only: every entry in .trivyignore carries its reason and
+        # re-evaluation trigger.
+        run: |
+          ignores=()
+          while read -r id; do ignores+=(--ignore-vuln "${id}"); done < <(grep -vE '^\s*(#|$)' .trivyignore)
+          pip-audit --strict -r requirements/runtime.txt "${ignores[@]}"
       - name: audit dev requirements
         run: pip-audit --strict .
 
@@ -256,6 +261,7 @@ jobs:
           image-ref: aegisx9:ci-${{ github.sha }}
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          trivyignores: .trivyignore
           exit-code: "1"
 
   workspace-image:
