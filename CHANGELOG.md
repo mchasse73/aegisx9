@@ -7,9 +7,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- CI image boot smoke asserts that `/v1/models` without valid credentials (no header, an
-  empty bearer, a random bearer) returns 401, with and without a database, so an
-  exception in the auth path can't ship as a 500 again (closes #68).
+- CI image boot smoke asserts that `/v1/models` without valid credentials returns 401:
+  no header and an empty bearer with and without a database, and a random bearer with the
+  database (the production setup), so an exception in the auth path can't ship as a 500
+  again (closes #68).
 
 ### Fixed
 - CI: pip-audit and the gateway image Trivy scans read one documented ignore list
