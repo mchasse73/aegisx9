@@ -1,0 +1,17 @@
+# Vulnerability ignore list for the gateway image and its runtime requirements. Read by
+# Trivy (gateway image scans in ci.yml and release.yml) and by pip-audit (CI passes every
+# non-comment line as --ignore-vuln). Every entry: the affected component, why it cannot be
+# fixed here and why it does not apply, and when it is re-evaluated. Drop an entry as soon
+# as an upstream release carries the fix.
+
+# 2026-10-27 (#88): filelock 3.x, fixed in 4.2.1. LiteLLM up to 1.106.4 requires
+# filelock<4.0, so no pin resolves. GHSA-v4x8-3wr5-3wq8 is in ReadWriteLock, which LiteLLM
+# never uses, and needs a second local user; the gateway pod is one non-root user on a
+# read-only root filesystem. The other two are Windows-only. Re-evaluate on every
+# Dependabot bump of litellm; remove once it allows filelock 4.2.1.
+CVE-2026-112940
+GHSA-v4x8-3wr5-3wq8
+CVE-2026-112913
+GHSA-9vhv-jxww-xfm5
+CVE-2026-112907
+GHSA-567q-5qvw-pf92
