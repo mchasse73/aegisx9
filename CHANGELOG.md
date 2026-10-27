@@ -13,6 +13,10 @@ All notable changes to this project are documented here. The format follows
   again (closes #68).
 
 ### Fixed
+- The gateway image no longer contains `litellm-enterprise`, a proprietary package that
+  `litellm[proxy]` pulls in (production use needs a BerriAI subscription; redistribution is
+  not allowed). LiteLLM runs without it; the image job fails if it ever comes back
+  (closes #91).
 - CI: pip-audit and the gateway image Trivy scans read one documented ignore list
   (`.trivyignore`). It holds three filelock advisories that don't apply to the gateway
   and can't be fixed while LiteLLM requires filelock<4.0; removed once it allows 4.2.1.

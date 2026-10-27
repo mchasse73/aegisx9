@@ -12,7 +12,12 @@ WORKDIR /src
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 COPY requirements/runtime.txt requirements/runtime.txt
-RUN pip install -r requirements/runtime.txt
+# litellm[proxy] pulls in litellm-enterprise, which is proprietary (production use needs a
+# BerriAI subscription; redistribution is not allowed). LiteLLM guards every import of it
+# and runs without it, so it is removed and must never be in the image (#91).
+RUN pip install -r requirements/runtime.txt \
+ && pip uninstall -y litellm-enterprise \
+ && python -c 'import importlib.util, sys; sys.exit(importlib.util.find_spec("litellm_enterprise") is not None)'
 COPY pyproject.toml README.md LICENSE VERSION ./
 COPY src ./src
 RUN pip install --no-deps .

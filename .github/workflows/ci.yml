@@ -263,6 +263,12 @@ jobs:
             || { echo "prisma CLI does not run offline"; exit 1; }
           echo "prisma CLI runs offline"
 
+          # The proprietary litellm-enterprise package must not be in the image (#91).
+          docker run --rm --network none --read-only --entrypoint python "${IMG}" -c \
+            'import importlib.util, sys; sys.exit(importlib.util.find_spec("litellm_enterprise") is not None)' \
+            || { echo "litellm-enterprise is in the image"; exit 1; }
+          echo "no litellm-enterprise in the image"
+
           # 3. With Postgres: LiteLLM applies its migrations at startup, then serves.
           pg_password="$(rnd)"
           printf 'POSTGRES_USER=aegisx9\nPOSTGRES_DB=aegisx9\nPOSTGRES_PASSWORD=%s\n' "${pg_password}" > "${RUNNER_TEMP}/pg.env"
