@@ -240,7 +240,8 @@ def test_non_numeric_times_rejected(keys: Keys, clock: Clock) -> None:
 
 
 def test_alg_none_rejected(keys: Keys, clock: Clock) -> None:
-    token = jwt.encode(claims(), None, algorithm="none", headers={"kid": "r1"})
+    # An unsigned token on purpose: the verifier must refuse it.
+    token = jwt.encode(claims(), None, algorithm="none", headers={"kid": "r1"})  # nosemgrep
     assert _reason(verifier(keys, clock), token) == "algorithm"
 
 

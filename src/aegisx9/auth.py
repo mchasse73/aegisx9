@@ -316,7 +316,8 @@ class Verifier:
             raise AuthError("too_large")
         try:
             header = jwt.get_unverified_header(token)
-            unverified = jwt.decode(token, options={"verify_signature": False})
+            # Read only to pick the issuer's keys; the verified decode below is what counts.
+            unverified = jwt.decode(token, options={"verify_signature": False})  # nosemgrep
         except jwt.PyJWTError:
             raise AuthError("malformed") from None
         alg = header.get("alg")
