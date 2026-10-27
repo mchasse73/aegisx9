@@ -227,11 +227,34 @@ jobs:
             done
             echo "${name}: proxy did not start"; logs "${name}"; return 1
           }
+          # unauth <name> <port> <labels...>: a call without valid credentials must be refused
+          # with 401, never a 5xx from an exception in the auth path (#68). Labels: none (no
+          # header), empty (empty bearer), random (a random bearer generated here; needs the
+          # database, without one LiteLLM can't look the key up and answers 400).
+          unauth() {
+            local name="$1" port="$2" code label; shift 2
+            for label in "$@"; do
+              case "${label}" in
+                none) code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+                  "http://127.0.0.1:${port}/v1/models") || true ;;
+                empty) code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+                  -H 'Authorization: Bearer ' "http://127.0.0.1:${port}/v1/models") || true ;;
+                random) code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+                  -H "Authorization: Bearer $(rnd)" "http://127.0.0.1:${port}/v1/models") || true ;;
+              esac
+              [ "${code}" = "401" ] || {
+                echo "${name}: /v1/models with ${label} credentials returned ${code}, expected 401"
+                logs "${name}"; return 1
+              }
+            done
+            echo "${name}: unauthenticated /v1/models is refused with 401"
+          }
           cleanup() { docker rm -f smoke smoke-db smoke-pg >/dev/null 2>&1 || true; rm -f "${RUNNER_TEMP}"/*.env; }
           trap cleanup EXIT
 
           # 1. No database.
           boot smoke 4000 90 -p 4000:4000
+          unauth smoke 4000 none empty
           docker rm -f smoke >/dev/null
 
           # 2. The Prisma toolchain is baked: it runs with no network at all.
@@ -256,6 +279,7 @@ jobs:
             -c 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL')"
           echo "LiteLLM migrations applied: ${applied}"
           [ "${applied}" -gt 0 ] || { logs smoke-db; exit 1; }
+          unauth smoke-db 4001 none empty random
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: aegisx9:ci-${{ github.sha }}
