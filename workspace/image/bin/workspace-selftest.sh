@@ -42,6 +42,10 @@ for f in /opt/aegisx9/hooks/*.sh /opt/aegisx9/bin/*; do
 done
 if [ "$quick" -eq 0 ]; then
   check claude --version
+  # No package manager in the workspace (#99): npm, npx and corepack are build-time only.
+  check test ! -e /opt/node/bin/npm
+  check test ! -e /opt/node/bin/npx
+  check test ! -e /opt/node/lib/node_modules/npm
   check vault version
   check python3 --version
   check rsync --version
