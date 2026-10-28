@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-28
+
 ### Fixed
 - Scanner: the webhook URL parameter is now optional (#102). v0.3.0's boot-time fetcher
   required it, so the scan units could not start before an Event-Driven Ansible receiver
