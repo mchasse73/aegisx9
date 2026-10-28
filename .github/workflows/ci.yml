@@ -84,7 +84,8 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends nmap
-          sudo systemd-sysusers scanner/systemd/aegisx9-scanner.sysusers.conf
+          # systemd-sysusers resolves relative paths against /, not the working directory.
+          sudo systemd-sysusers "${GITHUB_WORKSPACE}/scanner/systemd/aegisx9-scanner.sysusers.conf"
           id aegisx9-scanner
       - name: nmap SYN and UDP scans succeed under the daily unit's sandbox
         run: |

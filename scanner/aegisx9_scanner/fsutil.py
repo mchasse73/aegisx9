@@ -28,4 +28,5 @@ def ensure_group_dir(path: Path) -> None:
             d.mkdir(mode=GROUP_DIR_MODE)
         except FileExistsError:
             continue  # another unit created it first
-        os.chmod(d, GROUP_DIR_MODE)
+        # Group rwx is the point (units share the directory); nothing for others.
+        os.chmod(d, GROUP_DIR_MODE)  # nosemgrep
