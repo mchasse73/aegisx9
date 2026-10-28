@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aegisx9_scanner.checks import CommandRunner, find_tool, run_command
+from aegisx9_scanner.fsutil import ensure_group_dir
 
 NUCLEI_TAGS = "exposure,config,backup,misconfig,exposures"
 NUCLEI_SEVERITIES = "low,medium,high,critical"
@@ -99,7 +100,7 @@ def run_nuclei(
     if nuclei is None:
         result.notes.append("nuclei not installed: template scan skipped")
         return result
-    work_dir.mkdir(parents=True, exist_ok=True)
+    ensure_group_dir(work_dir)
     targets_file = work_dir / "nuclei-targets.txt"
     output = work_dir / "nuclei.jsonl"
     targets_file.write_text("".join(f"{u}\n" for u in urls), encoding="utf-8")

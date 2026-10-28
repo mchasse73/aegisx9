@@ -45,7 +45,9 @@ ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 ProtectProc=invisible
-ProcSubset=pid
+# No ProcSubset=pid here: Node.js (promptfoo) and torch (pulled in by garak) read
+# /proc/stat, /proc/cpuinfo and /proc/meminfo for CPU and memory sizing. The uptime unit
+# runs only the scanner's own HTTP client and keeps ProcSubset=pid.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=yes
 RestrictRealtime=yes

@@ -5,10 +5,14 @@
 # into 0600 root-owned files. Never add `set -x`.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
+export PIP_NO_CACHE_DIR=1
 exec > >(tee -a /var/log/aegisx9-scanner-bootstrap.log) 2>&1
 echo "aegisx9-scanner bootstrap start: $(date -u +%FT%TZ)"
 
 PKG_REF='${scanner_package_ref}'
+TORCH_VERSION='${torch_version}'
+TORCH_INDEX_URL='${torch_index_url}'
+GARAK_VERSION='${garak_version}'
 NUCLEI_VERSION='${nuclei_version}'
 RAW_BASE="https://raw.githubusercontent.com/mchasse73/aegisx9/$${PKG_REF}/scanner/systemd"
 
@@ -18,13 +22,78 @@ RAW_BASE="https://raw.githubusercontent.com/mchasse73/aegisx9/$${PKG_REF}/scanne
 apt-get update -y
 apt-get upgrade -y
 apt-get install -y --no-install-recommends \
-  nmap python3-venv python3-pip dnsutils ca-certificates curl unzip jq git \
+  nmap python3-venv python3-pip dnsutils ca-certificates curl unzip jq git gnupg \
   ufw unattended-upgrades chrony nodejs npm
-if ! command -v aws >/dev/null 2>&1; then
-  apt-get install -y --no-install-recommends awscli
-fi
 # amazon-ssm-agent ships as a snap on Ubuntu 24.04 cloud images; make sure it runs.
 snap start amazon-ssm-agent 2>/dev/null || true
+
+case "$(uname -m)" in
+  x86_64) AWS_ARCH=x86_64; GO_ARCH=amd64 ;;
+  aarch64) AWS_ARCH=aarch64; GO_ARCH=arm64 ;;
+  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+# AWS CLI v2 from the official zip, signature-verified. Ubuntu 24.04 has no `awscli`
+# package, and the snap cannot run inside the hardened aegisx9-scanner-env.service
+# (NoNewPrivileges, RestrictNamespaces), so every parameter read failed. The key is the
+# AWS CLI team's published public key (fingerprint below, from the AWS CLI user guide,
+# "Verify the integrity and authenticity of the downloaded installer"). It expires
+# 2027-07-01: refresh it from that page before then, or verification fails closed.
+AWS_CLI_SIGNER_FINGERPRINT='FB5DB77FD5C118B80511ADA8A6310ACC4672475C'
+if [ ! -x /usr/local/bin/aws ]; then
+  awstmp="$(mktemp -d)"
+  export GNUPGHOME="$${awstmp}/gnupg"
+  install -d -m 0700 "$${GNUPGHOME}"
+  cat > "$${awstmp}/aws-cli.asc" <<'AWSKEY'
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQINBF2Cr7UBEADJZHcgusOJl7ENSyumXh85z0TRV0xJorM2B/JL0kHOyigQluUG
+ZMLhENaG0bYatdrKP+3H91lvK050pXwnO/R7fB/FSTouki4ciIx5OuLlnJZIxSzx
+PqGl0mkxImLNbGWoi6Lto0LYxqHN2iQtzlwTVmq9733zd3XfcXrZ3+LblHAgEt5G
+TfNxEKJ8soPLyWmwDH6HWCnjZ/aIQRBTIQ05uVeEoYxSh6wOai7ss/KveoSNBbYz
+gbdzoqI2Y8cgH2nbfgp3DSasaLZEdCSsIsK1u05CinE7k2qZ7KgKAUIcT/cR/grk
+C6VwsnDU0OUCideXcQ8WeHutqvgZH1JgKDbznoIzeQHJD238GEu+eKhRHcz8/jeG
+94zkcgJOz3KbZGYMiTh277Fvj9zzvZsbMBCedV1BTg3TqgvdX4bdkhf5cH+7NtWO
+lrFj6UwAsGukBTAOxC0l/dnSmZhJ7Z1KmEWilro/gOrjtOxqRQutlIqG22TaqoPG
+fYVN+en3Zwbt97kcgZDwqbuykNt64oZWc4XKCa3mprEGC3IbJTBFqglXmZ7l9ywG
+EEUJYOlb2XrSuPWml39beWdKM8kzr1OjnlOm6+lpTRCBfo0wa9F8YZRhHPAkwKkX
+XDeOGpWRj4ohOx0d2GWkyV5xyN14p2tQOCdOODmz80yUTgRpPVQUtOEhXQARAQAB
+tCFBV1MgQ0xJIFRlYW0gPGF3cy1jbGlAYW1hem9uLmNvbT6JAlQEEwEIAD4CGwMF
+CwkIBwIGFQoJCAsCBBYCAwECHgECF4AWIQT7Xbd/1cEYuAURraimMQrMRnJHXAUC
+akV0ygUJDqP4lQAKCRCmMQrMRnJHXFHjD/9eyZLYcKuQOlLvtqSDtUBiEZf6ZZjM
+i3ygYH8rJNtuToUH+HvSpe819urJCquXhDrlK6N+aqW0hCLtNABJG/vsafIgvIYJ
+hSGgpgtNnQyMV1jViRWqPjbouw8OkYKBThUfT1i2Y+wn58ifs6ODBCmTexWtXspA
+Si+Gt49xDOW0APmbOPnI+a4HJW6tVEo6MWS0WjzpiBayR3d1A4pt4YrPfSdDgpLo
+h2SLQqlRqvvVZJaWBjhkErNFpfsBA06sDcPEOb0G8LBUbR4WOcdvhe5LubJbZuxC
+AG9kNPCVeQP1ixwjgjXKysaxeQ6rv0VzIQgRp6tLVLWhy6AKDNvLjFSsmXZ1Wl08
+Y/RlOHXlzLuQMRE6sR1wOdRxc9TsrNWTGiBK65cvSWOy03JeBkQQ8pesqltiyxI9
+U21kkgiXtTSKNGfKK8pO27D81YANhRqPK7iTp6kuFiY2WtOg90KTMNlIT+Ff85Y2
+b1rHj6Z0SrCkJujhWk3IBPic/wJgz01LEc/OAdUPlby90RJZcIBhSlWhT7mXnXIO
+c0HWlNQrns2s3CTyYwZSiSlYe9ApeLwhjDo8NhbFuCAy61l6O5UsR4AfZxx/rGKv
+2wFb1/RN/P4gNe6vmxZAPjR0AQcwD3tc2McimOLr/22kmPz8IH3I0X7WoSFr0Biz
+E91G7bb0hOb/cA==
+=knv7
+-----END PGP PUBLIC KEY BLOCK-----
+AWSKEY
+  gpg --batch --quiet --import "$${awstmp}/aws-cli.asc"
+  curl -fsSLo "$${awstmp}/awscliv2.zip" "https://awscli.amazonaws.com/awscli-exe-linux-$${AWS_ARCH}.zip"
+  curl -fsSLo "$${awstmp}/awscliv2.sig" "https://awscli.amazonaws.com/awscli-exe-linux-$${AWS_ARCH}.zip.sig"
+  # Fail closed: accept only a GOODSIG and a VALIDSIG from exactly this key, and nothing
+  # that marks the key or signature expired, revoked or bad. gpg still prints VALIDSIG
+  # for a signature made by an expired or revoked key, so VALIDSIG alone is not enough.
+  gpg_status="$(gpg --batch --status-fd 1 --verify "$${awstmp}/awscliv2.sig" "$${awstmp}/awscliv2.zip" 2>/dev/null || true)"
+  if ! grep -q "^\[GNUPG:\] VALIDSIG $${AWS_CLI_SIGNER_FINGERPRINT} " <<<"$${gpg_status}" \
+      || ! grep -q "^\[GNUPG:\] GOODSIG " <<<"$${gpg_status}" \
+      || grep -Eq "^\[GNUPG:\] (EXPKEYSIG|REVKEYSIG|EXPSIG|BADSIG|ERRSIG|KEYEXPIRED|KEYREVOKED) " <<<"$${gpg_status}"; then
+    echo "AWS CLI signature did not verify (bad, expired or revoked): refusing to install it" >&2
+    exit 1
+  fi
+  unzip -q "$${awstmp}/awscliv2.zip" -d "$${awstmp}"
+  "$${awstmp}/aws/install" --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli
+  unset GNUPGHOME
+  rm -rf "$${awstmp}"
+fi
+/usr/local/bin/aws --version
 
 # ---------------------------------------------------------------------------
 # 2. Host baseline (brief): deny all inbound, auto-patch, sane sysctl, timezone
@@ -55,7 +124,7 @@ systemctl enable --now chrony
 # ---------------------------------------------------------------------------
 tmp="$(mktemp -d)"
 base="https://github.com/projectdiscovery/nuclei/releases/download/v$${NUCLEI_VERSION}"
-zip="nuclei_$${NUCLEI_VERSION}_linux_amd64.zip"
+zip="nuclei_$${NUCLEI_VERSION}_linux_$${GO_ARCH}.zip"
 curl -fsSLo "$${tmp}/$${zip}" "$${base}/$${zip}"
 curl -fsSLo "$${tmp}/checksums.txt" "$${base}/nuclei_$${NUCLEI_VERSION}_checksums.txt"
 (cd "$${tmp}" && grep " $${zip}$" checksums.txt | sha256sum -c -)
@@ -72,15 +141,26 @@ systemd-sysusers
 systemd-tmpfiles --create
 
 python3 -m venv /opt/aegisx9-scanner/venv
-/opt/aegisx9-scanner/venv/bin/pip install --quiet --upgrade pip
-/opt/aegisx9-scanner/venv/bin/pip install --quiet \
-  "git+https://github.com/mchasse73/aegisx9@$${PKG_REF}#egg=aegisx9[scanner]" \
-  "garak==0.17.1"
-
+# No pip cache (it alone was about 3 GB), and torch from the CPU-only index first: garak
+# depends on torch, and the default PyPI wheel drags in the CUDA stack (a ~6 GB venv
+# that filled a 16 GiB root volume). The constraints file pins the +cpu build, which
+# exists only on the CPU index, so the later install cannot swap in the CUDA build.
+PIP="/opt/aegisx9-scanner/venv/bin/pip"
+CONSTRAINTS=/opt/aegisx9-scanner/venv/constraints.txt
+"$${PIP}" install --quiet --no-cache-dir --upgrade pip
+"$${PIP}" install --quiet --no-cache-dir \
+  --index-url "$${TORCH_INDEX_URL}" "torch==$${TORCH_VERSION}+cpu"
+printf 'torch==%s+cpu\n' "$${TORCH_VERSION}" > "$${CONSTRAINTS}"
+chmod 0644 "$${CONSTRAINTS}"
+# PEP 508 direct reference: pip rejects extras in a #egg= fragment (invalid-egg-fragment).
+"$${PIP}" install --quiet --no-cache-dir -c "$${CONSTRAINTS}" \
+  "aegisx9[scanner] @ git+https://github.com/mchasse73/aegisx9@$${PKG_REF}" \
+  "garak==$${GARAK_VERSION}"
 # Red-team suites (promptfoo + garak configs) from the same pinned ref, used by the
 # weekly redteam unit (AEGISX9_SCANNER_REDTEAM_SUITE_DIR). promptfoo runs via npx.
 rt="$(mktemp -d)"
-curl -fsSL "https://github.com/mchasse73/aegisx9/archive/refs/tags/$${PKG_REF}.tar.gz" \
+# archive/<ref> serves tags and commit SHAs alike (refs/tags/ would reject a SHA).
+curl -fsSL "https://github.com/mchasse73/aegisx9/archive/$${PKG_REF}.tar.gz" \
   | tar -xz -C "$${rt}" --strip-components=1 --wildcards '*/redteam/*'
 rm -rf /opt/aegisx9-scanner/redteam
 install -d -m 0755 /opt/aegisx9-scanner/redteam
@@ -140,8 +220,18 @@ for u in aegisx9-scanner-env.service \
   chmod 0644 "/etc/systemd/system/$${u}"
 done
 systemctl daemon-reload
-systemctl enable --now aegisx9-scanner-env.service
+systemctl enable aegisx9-scanner-env.service
+# The timers are enabled whatever the fetcher's outcome: each scan unit Requires= the
+# fetcher, so no scan runs with missing secrets, and the first timer run after a
+# successful fetch (the unit also retries itself, Restart=on-failure) works. A failing
+# fetcher must not abort the bootstrap (set -e) before this line.
 systemctl enable --now aegisx9-scan-daily.timer aegisx9-scan-uptime.timer aegisx9-scan-redteam.timer
+if ! systemctl start aegisx9-scanner-env.service; then
+  echo "aegisx9-scanner-env failed: scans stay blocked until the parameters below exist" >&2
+  # The fetcher logs parameter NAMES only, never values.
+  journalctl -u aegisx9-scanner-env.service -b -o cat --no-pager 2>/dev/null \
+    | grep -E 'not readable|not found|missing' >&2 || true
+fi
 
 # TODO(platform operations): install the outbound tunnel agent that lets the internal
 # network read /var/lib/aegisx9-scanner reports. Its credential is already fetched to

@@ -1,6 +1,7 @@
 ---
 # Install or update the external vantage scanner on its host. The host is reached over
 # AWS Systems Manager Session Manager (inventory/scanner.yml), never SSH. Pass
+# scanner_package_ref (a release tag or full commit SHA; required, no default),
 # scanner_approved_registry_path (the registry file from the platform operations
 # checkout) and the scanner_targets / scanner_never_target mappings as extra vars.
 - name: Deploy the AegisX9 external vantage scanner

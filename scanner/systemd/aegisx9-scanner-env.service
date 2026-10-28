@@ -10,11 +10,21 @@ Documentation=https://github.com/mchasse73/aegisx9/tree/main/scanner
 After=network-online.target
 Wants=network-online.target
 Before=aegisx9-scan-daily.service aegisx9-scan-uptime.service aegisx9-scan-redteam.service
+# A boot-time blip (network, instance role not ready) is retried inside the script and
+# then by Restart= below; at most 5 starts per 30 minutes. After that the unit stays
+# failed until the next timer run pulls it in again (Requires=) or it is restarted.
+StartLimitIntervalSec=30min
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/aegisx9-scanner-env
+# Exit 1 = a required parameter is missing or unreadable (see the script).
+Restart=on-failure
+RestartSec=60s
+# The script's own retries take about two minutes per parameter at worst.
+TimeoutStartSec=15min
 UMask=0077
 # Needs root to write under /etc; everything else is locked down.
 NoNewPrivileges=yes

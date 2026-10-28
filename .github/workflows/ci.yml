@@ -66,6 +66,66 @@ jobs:
           AEGISX9_EXTRA_IDENTIFIER_PATTERNS: ${{ secrets.INTERNAL_IDENTIFIER_PATTERNS }}
         run: python3 scripts/ci/check_identifiers.py
 
+  scanner-sandbox:
+    # The scanner units' sandboxes, exercised for real: nmap runs under the daily unit's
+    # [Service] hardening parsed from the unit file (scripts/ci/scanner_unit_sandbox.py).
+    # ProcSubset=pid once hid /proc/net from nmap and the port scan never ran (#96).
+    # Probes go to 192.0.2.1 (TEST-NET-1, RFC 5737): routed via the default interface,
+    # which is what failed, and never a real host.
+    name: scanner unit sandbox (nmap under the daily unit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install nmap and the scanner's service account (from the shipped sysusers file)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends nmap
+          # systemd-sysusers resolves relative paths against /, not the working directory.
+          sudo systemd-sysusers "${GITHUB_WORKSPACE}/scanner/systemd/aegisx9-scanner.sysusers.conf"
+          id aegisx9-scanner
+      - name: nmap SYN and UDP scans succeed under the daily unit's sandbox
+        run: |
+          set -uo pipefail
+          unit=scanner/systemd/aegisx9-scan-daily.service
+          for scan in -sS -sU; do
+            out="$(sudo python3 scripts/ci/scanner_unit_sandbox.py "${unit}" -- \
+              /usr/bin/nmap "${scan}" --privileged -Pn -n -p 9 --max-retries 0 \
+              --host-timeout 15s 192.0.2.1 2>&1)" && rc=0 || rc=$?
+            printf '%s\n' "${out}"
+            if [ "${rc}" -ne 0 ] || grep -Eq "can't find interface|route_dst|Operation not permitted" <<<"${out}"; then
+              echo "::error::nmap ${scan} failed under ${unit} (rc=${rc})"
+              exit 1
+            fi
+          done
+      - name: negative control (ProcSubset=pid must reproduce the original failure)
+        run: |
+          set -uo pipefail
+          out="$(sudo python3 scripts/ci/scanner_unit_sandbox.py \
+            scanner/systemd/aegisx9-scan-daily.service --extra ProcSubset=pid -- \
+            /usr/bin/nmap -sS --privileged -Pn -n -p 9 --max-retries 0 \
+            --host-timeout 15s 192.0.2.1 2>&1)" && rc=0 || rc=$?
+          # (The runner's shell is `bash -e`: without `|| rc=$?` the expected failure ends the step.)
+          printf '%s\n' "${out}"
+          if [ "${rc}" -eq 0 ] && ! grep -q "can't find interface" <<<"${out}"; then
+            # A probe that cannot fail proves nothing; say so loudly without blocking.
+            echo "::warning::ProcSubset=pid did not break nmap on this runner: the positive check above is weaker than intended"
+          else
+            echo "negative control reproduced the original failure (rc=${rc})"
+          fi
+      - name: the AWS CLI runs under the secrets fetcher's sandbox
+        run: |
+          set -euo pipefail
+          if ! command -v aws >/dev/null 2>&1; then
+            echo "::warning::no aws cli on this runner image; check skipped"
+            exit 0
+          fi
+          sudo python3 scripts/ci/scanner_unit_sandbox.py \
+            scanner/systemd/aegisx9-scanner-env.service -- "$(command -v aws)" --version
+
   secret-scan:
     name: gitleaks
     runs-on: ubuntu-latest

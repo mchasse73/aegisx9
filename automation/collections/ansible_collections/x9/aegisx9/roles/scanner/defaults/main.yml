@@ -4,13 +4,25 @@
 # Secrets never pass through this role: the host fetches them from the SSM Parameter
 # Store at boot (aegisx9-scanner-env.service). This role only ships code and config.
 
-# Git tag of this repository to install the scanner package from (pinned).
-scanner_package_ref: v0.1.0
+# Release tag (vX.Y.Z) or full 40-character commit SHA of this repository to install the
+# scanner package from. Required, no default: it must name a release that contains the
+# bootstrap and unit fixes of issue #96. The role refuses to run until it is set.
+scanner_package_ref: ""
 scanner_venv: /opt/aegisx9-scanner/venv
+# torch is installed from the CPU-only wheel index before garak, so pip never pulls the
+# multi-gigabyte CUDA build (it filled a 16 GiB root volume). Keep in step with the
+# torch_version Terraform variable in infra/scanner.
+scanner_torch_version: "2.14.1"
+scanner_torch_index_url: https://download.pytorch.org/whl/cpu
+# Reinstall the scanner package even when the installed ref equals scanner_package_ref
+# (only needed if a tag was moved; normally a deploy rebuilds only when the ref changes).
+scanner_force_reinstall: false
 scanner_config_dir: /etc/aegisx9-scanner
 scanner_state_dir: /var/lib/aegisx9-scanner
-# garak release installed next to the scanner for the weekly red-team unit.
-scanner_garak_version: 0.17.1
+# garak release installed next to the scanner for the weekly red-team unit. Keep this,
+# scanner_torch_version and scanner_torch_index_url in step with the garak_version,
+# torch_version and torch_index_url Terraform variables in infra/scanner.
+scanner_garak_version: "0.17.1"
 # Red-team suites (promptfoo + garak configs) shipped from the project checkout.
 scanner_redteam_src_dir: "{{ playbook_dir }}/../../redteam"
 scanner_redteam_dir: /opt/aegisx9-scanner/redteam

@@ -66,9 +66,18 @@ class Target:
 
 @dataclass(frozen=True)
 class Refusal:
+    """A target the never-target list kept out of the scan.
+
+    ``intentional`` marks an approved-exposure registry entry that the never-target list
+    also covers: the name is public on purpose (a live-trading endpoint) and is
+    deliberately not scanned. Such a refusal is informational. Every other refusal comes
+    from something an operator asked to scan (targets.yml) and is a configuration
+    mistake."""
+
     name: str
     source: str
     rule: str
+    intentional: bool = False
 
 
 @dataclass
@@ -311,9 +320,12 @@ def build_targets(
         if name in seen:
             continue
         seen.add(name)
+        # Registry entries are approvals, not scan requests: one the never-target list
+        # covers is intentionally not scanned.
+        intentional = source.startswith("registry:")
         rule = never.match(name)
         if rule:
-            refused.append(Refusal(name=name, source=source, rule=rule))
+            refused.append(Refusal(name, source, rule, intentional))
             event("target refused by never_target", name=name, source=source, rule=rule)
             continue
         kind = _kind(name)
@@ -322,7 +334,7 @@ def build_targets(
             addresses = tuple(resolver(name))
             hit = never.match_any(addresses)
             if hit:
-                refused.append(Refusal(name=name, source=source, rule=hit))
+                refused.append(Refusal(name, source, hit, intentional))
                 event("target refused by never_target", name=name, source=source, rule=hit)
                 continue
         elif kind == "ip":
