@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-28
+
 ### Added
 - Short-lived JWT authentication (ADR 0010): `aegisx9.auth_proxy`, an auth sidecar in
   the gateway pod in front of LiteLLM (which then listens on loopback only). It validates

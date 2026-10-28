@@ -1,6 +1,18 @@
 ---
 ancestor: null
 releases:
+  0.3.0:
+    changes:
+      breaking_changes:
+        - >-
+          scanner role - scanner_package_ref has no default any more and must name a release
+          tag (vX.Y.Z) or a full commit SHA that contains the scanner fixes.
+      bugfixes:
+        - >-
+          scanner role - PEP 508 package install, CPU-only torch under a constraints pin, one
+          package build per deploy, replaces CUDA torch and git-less builds, and restarts the
+          secrets fetcher when it changes (aegisx9 GitHub issue 96).
+    release_date: "2026-10-28"
   0.2.0:
     changes:
       minor_changes:
