@@ -167,13 +167,13 @@ variable "ssm_parameter_prefix" {
 }
 
 variable "webhook_url_parameter" {
-  description = "SSM parameter holding the Event-Driven Ansible webhook URL."
+  description = "SSM parameter holding the Event-Driven Ansible webhook URL. Optional: absent means webhook alerts off (email only)."
   type        = string
   default     = "/aegisx9/scanner/webhook_url"
 }
 
 variable "webhook_secret_parameter" {
-  description = "SSM SecureString holding the webhook HMAC secret."
+  description = "SSM SecureString holding the webhook HMAC secret. Required only when the webhook URL parameter exists."
   type        = string
   default     = "/aegisx9/scanner/webhook_secret"
 }

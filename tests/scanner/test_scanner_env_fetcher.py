@@ -134,22 +134,46 @@ def test_required_parameter_missing_fails_and_leaves_no_empty_file(tmp_path: Pat
 
 def test_access_denied_and_empty_values_are_errors(tmp_path: Path) -> None:
     conf_dir, ssm, env = _setup(tmp_path)
-    _put(ssm, PARAMS["WEBHOOK_SECRET_PARAMETER"], secrets.token_urlsafe(24))
-    _put(ssm, PARAMS["WEBHOOK_URL_PARAMETER"], "")
+    _put(ssm, PARAMS["WEBHOOK_SECRET_PARAMETER"], "")
+    _put(ssm, PARAMS["WEBHOOK_URL_PARAMETER"], "https://eda.example.com/hook")
     (ssm / "denied").write_text(PARAMS["TUNNEL_SECRET_PARAMETER"] + "\n")
     proc = _run(env)
     assert proc.returncode == 1
     msgs = {r["msg"]: r["level"] for r in _logs(proc)}
-    assert msgs[f"required parameter not readable (empty): {PARAMS['WEBHOOK_URL_PARAMETER']}"] == (
-        "error"
-    )
+    hook = PARAMS["WEBHOOK_SECRET_PARAMETER"]
+    assert msgs[f"required parameter not readable (empty): {hook}"] == "error"
     tunnel = PARAMS["TUNNEL_SECRET_PARAMETER"]
     denied = f"optional parameter not readable (access_denied) after retries: {tunnel}"
     assert msgs[denied + " (empty file)"] == "error"
     # Access denied is retried (the instance role can lag at boot): 4 retries logged.
     retries = [r for r in _logs(proc) if r["msg"].startswith("parameter read failed")]
     assert len([r for r in retries if tunnel in r["msg"]]) == 4
-    assert not (conf_dir / "webhook_url").exists()
+    assert not (conf_dir / "webhook_secret").exists()
+
+
+def test_no_webhook_url_means_email_only(tmp_path: Path) -> None:
+    """No receiver yet (#102): the units still start, the webhook is off."""
+    conf_dir, _ssm, env = _setup(tmp_path)
+    proc = _run(env)
+    assert proc.returncode == 0, _logs(proc)
+    assert (conf_dir / "webhook_url").read_text() == ""
+    assert (conf_dir / "webhook_secret").read_text() == ""
+    assert "AEGISX9_SCANNER_WEBHOOK_URL=\n" in (conf_dir / "env").read_text()
+    msgs = {r["msg"]: r["level"] for r in _logs(proc)}
+    assert msgs["no webhook url: webhook alerts off, email only"] == "info"
+    assert not [r for r in _logs(proc) if r["level"] == "error"]
+
+
+def test_empty_webhook_url_is_off_and_secret_is_optional(tmp_path: Path) -> None:
+    conf_dir, ssm, env = _setup(tmp_path)
+    _put(ssm, PARAMS["WEBHOOK_URL_PARAMETER"], "")
+    key = secrets.token_urlsafe(24)
+    _put(ssm, PARAMS["WEBHOOK_SECRET_PARAMETER"], key)
+    proc = _run(env)
+    assert proc.returncode == 0, _logs(proc)
+    assert (conf_dir / "webhook_url").read_text() == ""
+    assert (conf_dir / "webhook_secret").read_text() == key
+    assert key not in proc.stderr
 
 
 def test_redteam_key_required_when_a_target_is_set(tmp_path: Path) -> None:

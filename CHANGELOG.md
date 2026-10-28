@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Scanner: the webhook URL parameter is now optional (#102). v0.3.0's boot-time fetcher
+  required it, so the scan units could not start before an Event-Driven Ansible receiver
+  existed; the redeploy for #96 stopped on the missing parameter. With no URL the webhook is
+  off and alerts go by email only (the notifier already treated an empty URL that way); the
+  webhook HMAC secret is required only when a URL is set. A non-https placeholder was not a
+  safe workaround: it logs an error on every alert.
+
 ## [0.3.0] - 2026-10-28
 
 ### Added
