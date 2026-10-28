@@ -30,6 +30,7 @@ flowchart LR
     end
     IdP[(Identity provider<br/>OIDC)]
     subgraph aegisx9["aegisx9 (k3s namespace)"]
+        AP[Auth sidecar<br/>JWT ≤15 min → virtual key]
         GW[LiteLLM proxy]
         IG[Input guards<br/>injection / jailbreak<br/>secret + PII redaction]
         POL[Policy<br/>model allowlist<br/>budgets / rate limits]
@@ -40,9 +41,10 @@ flowchart LR
     LOKI[(Loki)]
     GRAF[Grafana]
 
-    A -->|OIDC token| GW
-    B -->|OIDC token| GW
-    GW -. verify .-> IdP
+    A -->|OIDC token| AP
+    B -->|OIDC token| AP
+    AP -. JWKS .-> IdP
+    AP -->|short-lived virtual key| GW
     GW --> POL --> IG --> LLM
     LLM --> OG --> GW
     VAULT[(Vault<br/>provider keys<br/>transit signing<br/>PKI)]
