@@ -61,33 +61,98 @@
       zip (as the cloud-init bootstrap does), not the snap
     quiet: true
 
-- name: Install torch from the CPU-only index (before garak, which depends on it)
+- name: Inspect the venv (torch build, installed scanner ref)
+  # Prints one JSON object: torch is "absent", "cpu" or "non-cpu" (a CUDA build left by an
+  # older deploy satisfies the same version pin, so the version alone is not enough), and
+  # the ref the installed aegisx9 package came from. A missing venv reads as all-absent.
+  ansible.builtin.command:
+    argv:
+      - "{{ scanner_venv }}/bin/python"
+      - -c
+      - |
+        import importlib.metadata as m, json
+        out = {"torch": "absent", "aegisx9_ref": ""}
+        try:
+            v = m.version("torch")
+        except m.PackageNotFoundError:
+            pass
+        else:
+            cuda = ""
+            try:
+                import torch
+                cuda = getattr(torch.version, "cuda", None) or ""
+            except Exception:
+                cuda = "unknown"
+            out["torch"] = "cpu" if v.endswith("+cpu") and not cuda else "non-cpu"
+        try:
+            d = m.distribution("aegisx9")
+        except m.PackageNotFoundError:
+            pass
+        else:
+            du = json.loads(d.read_text("direct_url.json") or "{}")
+            out["aegisx9_ref"] = du.get("vcs_info", {}).get("requested_revision", "")
+        print(json.dumps(out))
+  register: scanner_venv_probe
+  changed_when: false
+  failed_when: false
+
+- name: Read the probe result
+  ansible.builtin.set_fact:
+    scanner_venv_state: >-
+      {{ (scanner_venv_probe.stdout | from_json)
+         if (scanner_venv_probe.rc | default(1)) == 0
+         else {'torch': 'absent', 'aegisx9_ref': ''} }}
+
+- name: Install torch from the CPU-only index (replacing a CUDA build if one is there)
   ansible.builtin.pip:
     name:
-      - "torch=={{ scanner_torch_version }}"
+      - "torch=={{ scanner_torch_version }}+cpu"
     virtualenv: "{{ scanner_venv }}"
     virtualenv_command: python3 -m venv
     extra_args: "--no-cache-dir --index-url {{ scanner_torch_index_url }}"
+    state: "{{ 'forcereinstall' if scanner_venv_state.torch == 'non-cpu' else 'present' }}"
+
+- name: Pin the CPU torch build for every later install
+  # torch==X.Y.Z+cpu exists only on the CPU index, so no later install can swap in the
+  # CUDA build from PyPI: it fails instead.
+  ansible.builtin.copy:
+    dest: "{{ scanner_venv }}/constraints.txt"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      torch=={{ scanner_torch_version }}+cpu
+
+- name: Install garak for the red-team unit (against the pinned CPU torch)
+  ansible.builtin.pip:
+    name:
+      - "garak=={{ scanner_garak_version }}"
+    virtualenv: "{{ scanner_venv }}"
+    extra_args: "--no-cache-dir -c {{ scanner_venv }}/constraints.txt"
     state: present
 
-- name: Install the scanner's dependencies and garak (the CPU torch already satisfies the pin)
+- name: Remove the installed scanner package when the pinned ref changed
+  # pip treats a direct-URL requirement whose version is already installed as satisfied
+  # and would neither reinstall it nor add its new dependencies; removing the one dist
+  # first makes the install below a clean install of the new ref, built once.
+  ansible.builtin.command:
+    argv: ["{{ scanner_venv }}/bin/pip", uninstall, --yes, aegisx9]
+  when:
+    - scanner_venv_state.aegisx9_ref | length > 0
+    - scanner_venv_state.aegisx9_ref != scanner_package_ref or scanner_force_reinstall | bool
+  changed_when: true
+
+- name: Install the scanner package at the pinned ref, with its dependencies
   ansible.builtin.pip:
     name:
       # PEP 508 direct reference: pip rejects extras in a #egg= fragment.
       - "aegisx9[scanner] @ git+https://github.com/mchasse73/aegisx9@{{ scanner_package_ref }}"
-      - "garak=={{ scanner_garak_version }}"
-      - "torch=={{ scanner_torch_version }}"
     virtualenv: "{{ scanner_venv }}"
-    extra_args: --no-cache-dir
+    extra_args: >-
+      --no-cache-dir --upgrade-strategy only-if-needed -c {{ scanner_venv }}/constraints.txt
     state: present
-
-- name: Reinstall the scanner package itself at the pinned ref (no dependencies, so torch stays CPU-only)
-  ansible.builtin.pip:
-    name:
-      - "aegisx9[scanner] @ git+https://github.com/mchasse73/aegisx9@{{ scanner_package_ref }}"
-    virtualenv: "{{ scanner_venv }}"
-    extra_args: --no-cache-dir --no-deps
-    state: forcereinstall
+  when: >-
+    scanner_venv_state.aegisx9_ref != scanner_package_ref or scanner_force_reinstall | bool
 
 - name: Install the red-team suites (promptfoo and garak configs) from the project checkout
   ansible.builtin.copy:
@@ -104,6 +169,7 @@
     owner: root
     group: root
     mode: "0700"
+  register: scanner_fetcher_script
 
 - name: Install the systemd units and timers
   ansible.builtin.copy:
@@ -113,6 +179,7 @@
     group: root
     mode: "0644"
   loop: "{{ scanner_units }}"
+  register: scanner_units_copy
   notify: Reload systemd
 
 - name: Ensure the configuration directory exists
@@ -163,15 +230,25 @@
 - name: Flush handlers so systemd sees the units before they are enabled
   ansible.builtin.meta: flush_handlers
 
-- name: Enable the boot-time secrets fetcher
+- name: Enable the boot-time secrets fetcher at boot
   ansible.builtin.systemd_service:
     name: aegisx9-scanner-env.service
     enabled: true
-    state: started
 
 - name: Enable the scan timers
+  # Enabled whatever the fetcher's outcome: each scan unit Requires= the fetcher, so a
+  # timer never runs a scan with missing secrets, and the first run after a successful
+  # fetch works.
   ansible.builtin.systemd_service:
     name: "{{ item }}"
     enabled: true
     state: started
   loop: "{{ scanner_timers }}"
+
+- name: Run the secrets fetcher (re-run when the fetcher or a unit changed)
+  # A oneshot with RemainAfterExit=yes stays "active" after its first run, so
+  # state=started would never run a fixed fetcher on an existing host and old empty
+  # secret files would stay. Restart it whenever the script or a unit changed.
+  ansible.builtin.systemd_service:
+    name: aegisx9-scanner-env.service
+    state: "{{ 'restarted' if (scanner_fetcher_script is changed or scanner_units_copy is changed) else 'started' }}"

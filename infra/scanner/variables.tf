@@ -116,6 +116,26 @@ variable "torch_version" {
   }
 }
 
+variable "torch_index_url" {
+  description = "Wheel index that serves the CPU-only torch build (torch==<torch_version>+cpu). Keep in step with scanner_torch_index_url in the x9.aegisx9.scanner role."
+  type        = string
+  default     = "https://download.pytorch.org/whl/cpu"
+  validation {
+    condition     = can(regex("^https://", var.torch_index_url))
+    error_message = "torch_index_url must be an https URL."
+  }
+}
+
+variable "garak_version" {
+  description = "garak release installed next to the scanner for the weekly red-team unit. Keep in step with scanner_garak_version in the x9.aegisx9.scanner role."
+  type        = string
+  default     = "0.17.1"
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.garak_version))
+    error_message = "garak_version must be X.Y.Z."
+  }
+}
+
 variable "redteam_target_url" {
   description = "Public gateway URL for the weekly external red-team run. Empty = the unit exits 0 with a note."
   type        = string

@@ -14,10 +14,15 @@ scanner_venv: /opt/aegisx9-scanner/venv
 # torch_version Terraform variable in infra/scanner.
 scanner_torch_version: "2.14.1"
 scanner_torch_index_url: https://download.pytorch.org/whl/cpu
+# Reinstall the scanner package even when the installed ref equals scanner_package_ref
+# (only needed if a tag was moved; normally a deploy rebuilds only when the ref changes).
+scanner_force_reinstall: false
 scanner_config_dir: /etc/aegisx9-scanner
 scanner_state_dir: /var/lib/aegisx9-scanner
-# garak release installed next to the scanner for the weekly red-team unit.
-scanner_garak_version: 0.17.1
+# garak release installed next to the scanner for the weekly red-team unit. Keep this,
+# scanner_torch_version and scanner_torch_index_url in step with the garak_version,
+# torch_version and torch_index_url Terraform variables in infra/scanner.
+scanner_garak_version: "0.17.1"
 # Red-team suites (promptfoo + garak configs) shipped from the project checkout.
 scanner_redteam_src_dir: "{{ playbook_dir }}/../../redteam"
 scanner_redteam_dir: /opt/aegisx9-scanner/redteam

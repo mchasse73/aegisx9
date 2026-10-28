@@ -30,53 +30,99 @@ log() {
 }
 
 failed=0
+# Seconds to wait between attempts on a transient error: 5 attempts over about two
+# minutes. Overridable only so the tests do not sleep.
+read -r -a RETRY_DELAYS <<< "${AEGISX9_SCANNER_ENV_RETRY_DELAYS:-8 15 30 60}"
+
+# fetch_once <parameter name> <file>: one read into <file>. Prints the outcome:
+# ok | empty | absent (ParameterNotFound) | access_denied | fetch_failed. The AWS CLI's
+# error text is classified and discarded, never logged.
+fetch_once() {
+  local name="$1" out="$2" errf result
+  errf="$(mktemp "${DIR}/.fetch-err.XXXXXX")"
+  if aws ssm get-parameter --with-decryption --name "${name}" \
+      --query Parameter.Value --output text > "${out}" 2> "${errf}"; then
+    # strip the trailing newline the CLI adds
+    printf '%s' "$(cat "${out}")" > "${out}"
+    if [ -s "${out}" ]; then result=ok; else result=empty; fi
+  elif grep -q '(ParameterNotFound)' "${errf}"; then
+    result=absent
+  elif grep -q '(AccessDenied' "${errf}"; then
+    result=access_denied
+  else
+    result=fetch_failed
+  fi
+  rm -f "${errf}"
+  printf '%s' "${result}"
+}
 
 # fetch <required|optional> <parameter name> <destination file>
 # The value travels from the AWS CLI's stdout straight into the file (0600, root).
-#  * required: any failure (unreadable, absent, empty) is an error. The destination is
-#    removed rather than left empty and the script exits non-zero at the end, so the
-#    service fails and the scan units (Requires=) do not start on a missing secret.
-#  * optional: an ABSENT parameter is informational and leaves an empty file so the
-#    units' LoadCredential= still finds it. Any other failure (access denied, the CLI
-#    cannot run) is logged as an error but does not fail the service.
+# A transient error (access denied while the instance role settles, a network or CLI
+# failure) is retried with backoff. Then:
+#  * required, absent or empty: the destination is removed (never left empty) and the
+#    script fails, so the scan units (Requires=) do not start on a missing secret.
+#  * required, still transient: an existing non-empty file from an earlier fetch is
+#    kept (error logged); with no good file the script fails.
+#  * optional: absent is informational and leaves an empty file so the units'
+#    LoadCredential= still finds it; a transient error keeps an existing non-empty
+#    file, else leaves an empty one, and is logged as an error without failing.
 fetch() {
-  local need="$1" name="$2" dest="$3" tmp errf reason
+  local need="$1" name="$2" dest="$3" tmp result attempt=0
   tmp="$(mktemp "${DIR}/.fetch.XXXXXX")"
-  errf="$(mktemp "${DIR}/.fetch-err.XXXXXX")"
-  if aws ssm get-parameter --with-decryption --name "${name}" \
-      --query Parameter.Value --output text > "${tmp}" 2> "${errf}"; then
-    # strip the trailing newline the CLI adds
-    printf '%s' "$(cat "${tmp}")" > "${tmp}"
-    reason=""
-    [ -s "${tmp}" ] || reason="empty"
-  elif grep -q '(ParameterNotFound)' "${errf}"; then
-    reason="absent"
-  elif grep -q '(AccessDenied' "${errf}"; then
-    reason="access_denied"
-  else
-    reason="fetch_failed"
-  fi
-  rm -f "${errf}"
-  if [ -z "${reason}" ]; then
+  while :; do
+    result="$(fetch_once "${name}" "${tmp}")"
+    case "${result}" in ok | empty | absent) break ;; esac
+    if [ "${attempt}" -ge "${#RETRY_DELAYS[@]}" ]; then
+      break
+    fi
+    log warning "parameter read failed (${result}), retrying in ${RETRY_DELAYS[${attempt}]}s: ${name}"
+    sleep "${RETRY_DELAYS[${attempt}]}"
+    attempt=$((attempt + 1))
+  done
+
+  if [ "${result}" = ok ]; then
     chmod 0600 "${tmp}"
     mv -f "${tmp}" "${dest}"
     log info "parameter fetched: ${name}"
     return 0
   fi
-  if [ "${need}" = "required" ]; then
-    rm -f "${tmp}" "${dest}"
-    log error "required parameter not readable (${reason}): ${name}"
-    failed=1
-    return 0
-  fi
-  if [ "${reason}" = "absent" ]; then
-    log info "optional parameter absent: ${name} (empty file)"
-  else
-    log error "optional parameter not readable (${reason}): ${name} (empty file)"
-  fi
-  : > "${tmp}"
+  rm -f "${tmp}"
+  case "${need}:${result}" in
+    required:absent | required:empty)
+      rm -f "${dest}"
+      log error "required parameter not readable (${result}): ${name}"
+      failed=1
+      ;;
+    required:*)
+      if [ -s "${dest}" ]; then
+        log error "required parameter not readable (${result}) after retries, kept the previous value: ${name}"
+      else
+        rm -f "${dest}"
+        log error "required parameter not readable (${result}) after retries: ${name}"
+        failed=1
+      fi
+      ;;
+    optional:absent | optional:empty)
+      log info "optional parameter ${result}: ${name} (empty file)"
+      empty_file "${dest}"
+      ;;
+    *)
+      if [ -s "${dest}" ]; then
+        log error "optional parameter not readable (${result}) after retries, kept the previous value: ${name}"
+      else
+        log error "optional parameter not readable (${result}) after retries: ${name} (empty file)"
+        empty_file "${dest}"
+      fi
+      ;;
+  esac
+}
+
+empty_file() {
+  local tmp
+  tmp="$(mktemp "${DIR}/.fetch.XXXXXX")"
   chmod 0600 "${tmp}"
-  mv -f "${tmp}" "${dest}"
+  mv -f "${tmp}" "$1"
 }
 
 if ! command -v aws >/dev/null 2>&1; then

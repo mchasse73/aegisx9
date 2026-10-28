@@ -23,6 +23,8 @@ nuclei_version      = "3.6.0"
 # Required: a release tag (or full commit SHA) that contains the #96 bootstrap fixes.
 scanner_package_ref = "<release tag, vX.Y.Z>"
 torch_version       = "2.14.1"
+torch_index_url     = "https://download.pytorch.org/whl/cpu"
+garak_version       = "0.17.1"
 
 redteam_target_url = "https://gateway.example.com"
 redteam_model      = "aegisx9-redteam"

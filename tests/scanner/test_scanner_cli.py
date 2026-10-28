@@ -219,30 +219,6 @@ def test_undelivered_notice_is_retried(
     assert not (state_dir / "notify" / "uptime.json").exists()
 
 
-def test_uptime_refusals_alone_do_not_alert(
-    config_dir: Path, state_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A never-target named in the configuration is reported, not alerted: with the
-    real registry some names are on the never-target list by design (#96)."""
-    (config_dir / "targets.yml").write_text(
-        "uptime:\n  - url: https://www.example.com/\n  - url: https://trading.example.com/\n"
-    )
-    monkeypatch.setattr(cli, "resolve", RESOLVE)
-    monkeypatch.setattr(
-        cli.uptime, "fetch", lambda url, timeout, address="": HttpResponse(200, {}, b"")
-    )
-    sent: list[str] = []
-    monkeypatch.setattr(
-        cli, "notify", lambda report, md, cfg, env, reason="": sent.append(reason) or {}
-    )
-    assert cli.main(_args(config_dir, state_dir, "uptime"), env={}) == cli.EXIT_CLEAN
-    last = json.loads((state_dir / "last_report.json").read_text())
-    assert last["clean"] and last["refused_count"] >= 1 and last["alerts"] == []
-    refused = {a["target"] for a in last["informational"] if a["kind"] == "REFUSED_TARGET"}
-    assert "trading.example.com" in refused
-    assert sent == []
-
-
 def test_redteam_run(
     config_dir: Path,
     state_dir: Path,

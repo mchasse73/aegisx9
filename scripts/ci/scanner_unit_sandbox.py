@@ -38,6 +38,8 @@ SKIPPED = frozenset(
         "ReadOnlyPaths",
         "ReadWritePaths",
         "RemainAfterExit",
+        "Restart",
+        "RestartSec",
     }
 )
 

@@ -26,8 +26,9 @@ PARAMS = {
 }
 
 # A stand-in for the AWS CLI: values come from files in $FAKE_SSM named after the
-# parameter; a name listed in $FAKE_SSM/denied fails as access denied; anything else is
-# ParameterNotFound. Mirrors the real CLI's stdout/stderr split.
+# parameter; a name listed in $FAKE_SSM/denied fails as access denied; a number in
+# $FAKE_SSM/<key>.flaky is how many more calls fail with a network error first; anything
+# else is ParameterNotFound. Mirrors the real CLI's stdout/stderr split.
 FAKE_AWS = """#!/bin/bash
 name=""
 while [ $# -gt 0 ]; do
@@ -35,6 +36,12 @@ while [ $# -gt 0 ]; do
   shift
 done
 key="${name//\\//_}"
+flaky="${FAKE_SSM}/${key}.flaky"
+if [ -f "${flaky}" ] && [ "$(cat "${flaky}")" -gt 0 ]; then
+  echo $(( $(cat "${flaky}") - 1 )) > "${flaky}"
+  echo "Could not connect to the endpoint URL" >&2
+  exit 255
+fi
 if grep -qx -- "${name}" "${FAKE_SSM}/denied" 2>/dev/null; then
   echo "An error occurred (AccessDeniedException) when calling the GetParameter operation" >&2
   exit 254
@@ -67,6 +74,7 @@ def _setup(tmp_path: Path, *, redteam_target: str = "") -> tuple[Path, Path, dic
         "PATH": f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
         "AEGISX9_SCANNER_ENV_DIR": str(conf_dir),
         "FAKE_SSM": str(ssm),
+        "AEGISX9_SCANNER_ENV_RETRY_DELAYS": "0 0 0 0",
     }
     return conf_dir, ssm, env
 
@@ -135,8 +143,12 @@ def test_access_denied_and_empty_values_are_errors(tmp_path: Path) -> None:
     assert msgs[f"required parameter not readable (empty): {PARAMS['WEBHOOK_URL_PARAMETER']}"] == (
         "error"
     )
-    denied = f"optional parameter not readable (access_denied): {PARAMS['TUNNEL_SECRET_PARAMETER']}"
+    tunnel = PARAMS["TUNNEL_SECRET_PARAMETER"]
+    denied = f"optional parameter not readable (access_denied) after retries: {tunnel}"
     assert msgs[denied + " (empty file)"] == "error"
+    # Access denied is retried (the instance role can lag at boot): 4 retries logged.
+    retries = [r for r in _logs(proc) if r["msg"].startswith("parameter read failed")]
+    assert len([r for r in retries if tunnel in r["msg"]]) == 4
     assert not (conf_dir / "webhook_url").exists()
 
 
@@ -167,3 +179,73 @@ def test_missing_aws_cli_fails(tmp_path: Path) -> None:
     )
     assert proc.returncode == 1
     assert any("aws cli not found" in r["msg"] for r in _logs(proc))
+
+
+def _good(ssm: Path) -> str:
+    key = secrets.token_urlsafe(24)
+    _put(ssm, PARAMS["WEBHOOK_SECRET_PARAMETER"], key)
+    _put(ssm, PARAMS["WEBHOOK_URL_PARAMETER"], "https://eda.example.com/hook")
+    return key
+
+
+def _flaky(ssm: Path, name: str, failures: int) -> None:
+    (ssm / (name.replace("/", "_") + ".flaky")).write_text(f"{failures}\n")
+
+
+def test_transient_error_is_retried_then_succeeds(tmp_path: Path) -> None:
+    conf_dir, ssm, env = _setup(tmp_path)
+    key = _good(ssm)
+    _flaky(ssm, PARAMS["WEBHOOK_SECRET_PARAMETER"], 3)
+    proc = _run(env)
+    assert proc.returncode == 0, _logs(proc)
+    assert (conf_dir / "webhook_secret").read_text() == key
+    retries = [r for r in _logs(proc) if "retrying" in r["msg"]]
+    assert len(retries) == 3 and {r["level"] for r in retries} == {"warning"}
+    assert all("(fetch_failed)" in r["msg"] for r in retries)
+
+
+def test_transient_error_keeps_the_last_good_value(tmp_path: Path) -> None:
+    conf_dir, ssm, env = _setup(tmp_path)
+    key = _good(ssm)
+    assert _run(env).returncode == 0
+    # Next boot: SSM unreachable for longer than the retries last.
+    _flaky(ssm, PARAMS["WEBHOOK_SECRET_PARAMETER"], 99)
+    proc = _run(env)
+    assert proc.returncode == 0, _logs(proc)
+    assert (conf_dir / "webhook_secret").read_text() == key
+    assert stat.S_IMODE((conf_dir / "webhook_secret").stat().st_mode) == 0o600
+    kept = [r for r in _logs(proc) if "kept the previous value" in r["msg"]]
+    assert len(kept) == 1 and kept[0]["level"] == "error"
+    assert PARAMS["WEBHOOK_SECRET_PARAMETER"] in kept[0]["msg"] and key not in proc.stderr
+
+
+def test_transient_error_without_a_good_file_fails(tmp_path: Path) -> None:
+    conf_dir, ssm, env = _setup(tmp_path)
+    _good(ssm)
+    _flaky(ssm, PARAMS["WEBHOOK_SECRET_PARAMETER"], 99)
+    (conf_dir / "webhook_secret").write_text("")  # an empty leftover is not a good file
+    proc = _run(env)
+    assert proc.returncode == 1
+    assert not (conf_dir / "webhook_secret").exists()
+
+
+def test_absent_required_parameter_removes_the_last_value(tmp_path: Path) -> None:
+    """Deleting a parameter is deliberate: the old value must not outlive it."""
+    conf_dir, ssm, env = _setup(tmp_path)
+    _good(ssm)
+    assert _run(env).returncode == 0
+    (ssm / PARAMS["WEBHOOK_SECRET_PARAMETER"].replace("/", "_")).unlink()
+    proc = _run(env)
+    assert proc.returncode == 1 and not (conf_dir / "webhook_secret").exists()
+    assert not any("retrying" in r["msg"] for r in _logs(proc))
+
+
+def test_optional_transient_error_keeps_previous_value(tmp_path: Path) -> None:
+    conf_dir, ssm, env = _setup(tmp_path)
+    _good(ssm)
+    tunnel = secrets.token_urlsafe(24)
+    _put(ssm, PARAMS["TUNNEL_SECRET_PARAMETER"], tunnel)
+    assert _run(env).returncode == 0
+    _flaky(ssm, PARAMS["TUNNEL_SECRET_PARAMETER"], 99)
+    assert _run(env).returncode == 0
+    assert (conf_dir / "tunnel_secret").read_text() == tunnel

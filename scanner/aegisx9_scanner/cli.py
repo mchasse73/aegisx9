@@ -155,13 +155,18 @@ def _validate(cfg: Config, today: Any) -> int:
     )
     for r in targets.refused:
         event(
-            "never-target hit in configuration",
-            level=logging.WARNING,
+            "registry entry intentionally not scanned (never-target)"
+            if r.intentional
+            else "never-target hit in configuration",
+            level=logging.INFO if r.intentional else logging.WARNING,
             name=r.name,
             source=r.source,
             rule=r.rule,
         )
-    return EXIT_CONFIG if targets.refused else EXIT_CLEAN
+    # Only a never-target an operator asked to scan is a configuration error; registry
+    # entries the never-target list covers are expected.
+    mistakes = [r for r in targets.refused if not r.intentional]
+    return EXIT_CONFIG if mistakes else EXIT_CLEAN
 
 
 def _work_dir(args: argparse.Namespace, mode: str) -> Path:

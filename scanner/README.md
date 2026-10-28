@@ -59,10 +59,13 @@ the scanner never widens them.
 patterns in it are refused wherever they come from (`targets.yml`, the registry, a DNS or
 uptime entry, or `--target-url`): they are not resolved, scanned, probed or red-teamed.
 A hostname that resolves into a forbidden CIDR is refused too, and every refusal is
-logged and reported as `REFUSED_TARGET` (severity `info`). A refusal is informational: the
-registry can list a name that is also a never-target on purpose (a public live-trading
-endpoint), so a refusal on its own never makes a run ALERT. `validate-config` still exits
-`2` on any refusal, so a mistake is caught at deploy time. The list is
+logged and reported as `REFUSED_TARGET`. There are two kinds:
+
+- a never-target named in `targets.yml` (hosts, CIDRs, DNS or uptime entries) is an
+  operator mistake: `high`, it alerts, and `validate-config` exits `2`;
+- an approved-exposure registry entry that the never-target list also covers is public on
+  purpose (a live-trading endpoint) and **intentionally not scanned**: `info`, reported
+  but never an alert on its own, and `validate-config` accepts it. The list is
 also passed to nmap as `--exclude`.
 
 **Live-trading endpoints are never scanned or loaded.** They belong in this file.
@@ -81,7 +84,7 @@ also passed to nmap as `--exclude`.
 | `APPROVED_PORT_OPENED` / `PORT_CLOSED` | medium | An approved port that was not open last run, or a port that closed since: a change is reported even when it is approved, so "clean" means nothing moved |
 | `DOWN` / `DEGRADED` | high / low | Endpoint unreachable or wrong status / slower than its budget |
 | `EXPIRED_APPROVAL`, `CHECK_INCOMPLETE` | medium, low-medium | Registry hygiene, a check that could not complete |
-| `REFUSED_TARGET` | info | A configured name is on the never-target list and was not touched (reported, not alerted unless `alert_min_severity` is `info`) |
+| `REFUSED_TARGET` | high (targets.yml), info (registry entry) | A never-target was not touched: an operator mistake in targets.yml, or a registry entry intentionally not scanned |
 | `REDTEAM_REGRESSION` | high | promptfoo attack succeeded or a garak family fell below its threshold |
 
 `settings.alert_min_severity` (default `medium`; `AEGISX9_SCANNER_ALERT_MIN_SEVERITY`
@@ -165,7 +168,7 @@ the weekly unit exits clean with a note.
 |---|---|
 | Package and venv | `/opt/aegisx9-scanner/venv/bin/aegisx9-scan`, installed from a pinned release tag or commit SHA as `aegisx9[scanner] @ git+https://github.com/mchasse73/aegisx9@<ref>`, with CPU-only torch for garak and no pip cache |
 | Configuration | `/etc/aegisx9-scanner/{approved_public,targets,never_target}.yml` and the non-secret `env` file (0600) |
-| Secrets | Fetched at boot from the cloud parameter store by `aegisx9-scanner-env.service` (AWS CLI v2 from the signature-verified official installer; the snap cannot run in its sandbox) into `0600` root files, handed to the units with systemd `LoadCredential=`; never in user-data, never on argv. The webhook URL and HMAC key are **required**, and so is the red-team key when a red-team target is set: if one cannot be read, the service fails with an error naming the parameter (never its value), no empty file is left and the scan units (`Requires=`) do not start. An absent optional parameter (the tunnel credential) is logged as info and leaves an empty file |
+| Secrets | Fetched at boot from the cloud parameter store by `aegisx9-scanner-env.service` (AWS CLI v2 from the signature-verified official installer; the snap cannot run in its sandbox) into `0600` root files, handed to the units with systemd `LoadCredential=`; never in user-data, never on argv. The webhook URL and HMAC key are **required**, and so is the red-team key when a red-team target is set: a transient read error is retried (5 attempts over about two minutes) and then keeps the last good value; a parameter that is absent or empty, or a transient error with no good value on disk, fails the service with an error naming the parameter (never its value), leaves no empty file, and the scan units (`Requires=`) do not start. The unit restarts itself on failure (`Restart=on-failure`, at most 5 starts in 30 minutes), the timers stay enabled, and the first timer run after a successful fetch works. An absent optional parameter (the tunnel credential) is logged as info and leaves an empty file. The deploy role re-runs the fetcher whenever the script or a unit changed |
 | Units | `systemd/`: `aegisx9-scan-daily` (08:00 America/New_York; static user with `CAP_NET_RAW CAP_NET_ADMIN` for raw scans), `aegisx9-scan-uptime` (every 5 min, `DynamicUser`), `aegisx9-scan-redteam` (weekly, `DynamicUser`); all `ProtectSystem=strict`, `PrivateTmp`, `NoNewPrivileges`, `ProtectProc=invisible`. `ProcSubset=pid` only on the uptime unit: nmap needs `/proc/net`, and Node.js and torch read `/proc/stat`, `/proc/cpuinfo` and `/proc/meminfo`. The daily unit sets `StateDirectoryMode=0770` and `LogsDirectoryMode=0770` to match the tmpfiles file; without them each start reset the directory to `0755` and the other units lost write access. `tests/scanner/test_scanner_units.py` and the CI job `scanner-sandbox` (nmap under the daily unit's parsed sandbox) guard both |
 | Infrastructure | `infra/scanner/` (Terraform, applied by platform operations through Terraform Enterprise): t3.small, Ubuntu 24.04 from the public SSM parameter, IMDSv2, encrypted root, no inbound security-group rules (Session Manager only), least-privilege role, existing elastic IP by association |
 | Deployment | `automation/playbooks/scanner_deploy.yml` (role `x9.aegisx9.scanner`, over the Session Manager connection) |
