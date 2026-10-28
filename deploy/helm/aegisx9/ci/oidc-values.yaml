@@ -1,0 +1,16 @@
+# CI only: renders the chart with the auth sidecar (ADR 0010) so the linters and the image
+# boot smoke cover it. The issuer here is a placeholder; the boot smoke mounts its own
+# auth.json with a key generated at runtime.
+gateway:
+  otel:
+    enabled: false
+  oidc:
+    enabled: true
+    issuers:
+      - name: ci
+        issuer: https://idp.ci.invalid/
+        jwksUrl: https://idp.ci.invalid/jwks
+        audience: aegisx9
+        groupTeams:
+          - group: ci-developers
+            team: developers

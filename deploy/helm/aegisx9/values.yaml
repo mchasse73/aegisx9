@@ -18,22 +18,44 @@ service:
 
 # Secret holding the proxy master key and provider settings. Created by External Secrets
 # (see deploy/overlays/<env>/externalsecret.yaml), never by this chart. Expected keys:
-# LITELLM_MASTER_KEY, AEGIS_PRINCIPAL_SALT, JWT_PUBLIC_KEY_URL (when gateway.oidc.jwksUrl
-# is empty), DATABASE_URL (budgets and spend tracking need the proxy database), the
+# LITELLM_MASTER_KEY, AEGIS_PRINCIPAL_SALT, the variables named by gateway.oidc.issuers[]
+# (issuerEnv, jwksUrlEnv) when OIDC is enabled, DATABASE_URL (budgets and spend tracking need the proxy database), the
 # provider keys referenced by gateway.models[].apiKeyEnv and, when wif.enabled, the
 # federation and Vault settings listed under wif. With wif.enabled the Secret must NOT
 # contain ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN.
 existingSecret: aegisx9-gateway
 
 gateway:
-  # OIDC (JWT) authentication against the identity provider.
+  # Short-lived JWT authentication (ADR 0010): an auth sidecar owns the service port and
+  # LiteLLM listens on 127.0.0.1:loopbackPort. A JWT from these issuers is verified and
+  # exchanged for a LiteLLM virtual key that expires with it; any other bearer (admin key,
+  # virtual keys) passes through to LiteLLM's own key checks. Tokens may live at most 900 s
+  # (enforced in code; maxLifetimeSeconds can only lower it). Enable only with an image that
+  # contains aegisx9.auth_proxy, in the same change that pins it.
   oidc:
-    enabled: true
-    # Leave empty to take JWT_PUBLIC_KEY_URL from the Secret instead of committing it.
-    jwksUrl: ""
-    audience: aegisx9
-    userIdClaim: sub
-    teamIdClaim: groups
+    enabled: false
+    loopbackPort: 4001
+    # CIDRs of the ingress whose X-Forwarded-For is kept (so LiteLLM and the audit log see
+    # the real client); from any other peer the header is replaced. Empty = never trusted.
+    trustedProxies: []
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        cpu: 500m
+        memory: 128Mi
+    issuers: []
+    # - name: idp                       # short label, logged on rejection
+    #   issuerEnv: JWT_ISSUER           # Secret key holding the exact `iss` value (or issuer: <literal>)
+    #   jwksUrlEnv: JWT_PUBLIC_KEY_URL  # Secret key holding the https JWKS URL (or jwksUrl: <literal>)
+    #   audience: aegisx9
+    #   userClaim: sub
+    #   groupsClaim: groups
+    #   groupTeams:                     # ordered; the first group the caller holds picks the team
+    #     - {group: <group>, team: developers}
+    #   maxLifetimeSeconds: 900
+    #   caFile: /etc/ssl/certs/ca-certificates.crt   # optional CA bundle for the JWKS host
   # Each model either names the Secret key holding its provider key (apiKeyEnv) or sets
   # wif: true, which routes it through the federation broker (Anthropic only; needs
   # wif.enabled). A wif model never has a credential in the gateway container.

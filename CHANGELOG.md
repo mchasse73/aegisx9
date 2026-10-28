@@ -7,6 +7,19 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Short-lived JWT authentication (ADR 0010): `aegisx9.auth_proxy`, an auth sidecar in
+  the gateway pod in front of LiteLLM (which then listens on loopback only). It validates
+  tokens from configured issuers (JWKS signature with asymmetric algorithms only, `iss`,
+  `aud`), requires `exp` and `iat`, refuses any token that lives longer than 15 minutes (a
+  ceiling in code that configuration can only lower), maps groups to LiteLLM teams and
+  exchanges the token for a virtual key scoped to that user and team that expires with the
+  token, so model access, team and per-member budgets apply through LiteLLM's own checks.
+  JWT callers are limited to inference routes; management routes answer 403.
+  Every rejected token gets a generic 401; logs carry only a reason code. Other bearers
+  (admin key, virtual keys) pass through unchanged. Chart: `gateway.oidc.issuers[]`
+  replaces `jwksUrl`/`audience`/`userIdClaim`/`teamIdClaim`, and `gateway.oidc.enabled`
+  defaults to false until an environment pins an image with the sidecar. CI image smoke
+  boots LiteLLM and the sidecar with Postgres and runs `scripts/ci/auth_smoke.py` (refs #86).
 - CI image boot smoke asserts that `/v1/models` without valid credentials returns 401:
   no header and an empty bearer with and without a database, and a random bearer with the
   database (the production setup), so an exception in the auth path can't ship as a 500
@@ -17,6 +30,9 @@ All notable changes to this project are documented here. The format follows
   `litellm[proxy]` pulls in (production use needs a BerriAI subscription; redistribution is
   not allowed). LiteLLM runs without it; the image job fails if it ever comes back
   (closes #91).
+- The chart no longer enables LiteLLM's `enable_jwt_auth`, an Enterprise-only feature that
+  answered every JWT with 403 and a message disclosing the edition and licence state
+  (refs #86).
 - CI: pip-audit and the gateway image Trivy scans read one documented ignore list
   (`.trivyignore`). It holds three filelock advisories that don't apply to the gateway
   and can't be fixed while LiteLLM requires filelock<4.0; removed once it allows 4.2.1.

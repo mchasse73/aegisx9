@@ -140,6 +140,8 @@ jobs:
         run: |
           mkdir -p rendered
           helm template aegisx9 deploy/helm/aegisx9 --namespace aegisx9-ci > rendered/chart.yaml
+          helm template aegisx9 deploy/helm/aegisx9 --namespace aegisx9-ci \
+            -f deploy/helm/aegisx9/ci/oidc-values.yaml > rendered/chart-oidc.yaml
           for env in staging prod; do
             kubectl kustomize --enable-helm "deploy/overlays/${env}" > "rendered/${env}.yaml"
           done
@@ -249,7 +251,10 @@ jobs:
             done
             echo "${name}: unauthenticated /v1/models is refused with 401"
           }
-          cleanup() { docker rm -f smoke smoke-db smoke-pg >/dev/null 2>&1 || true; rm -f "${RUNNER_TEMP}"/*.env; }
+          cleanup() {
+            docker rm -f smoke smoke-db smoke-auth smoke-auth-gw smoke-pg >/dev/null 2>&1 || true
+            rm -rf "${RUNNER_TEMP}"/*.env "${RUNNER_TEMP}/auth" "${RUNNER_TEMP}/authvenv"
+          }
           trap cleanup EXIT
 
           # 1. No database.
@@ -286,6 +291,44 @@ jobs:
           echo "LiteLLM migrations applied: ${applied}"
           [ "${applied}" -gt 0 ] || { logs smoke-db; exit 1; }
           unauth smoke-db 4001 none empty random
+          docker rm -f smoke-db >/dev/null
+
+          # 4. Auth sidecar (ADR 0010) on the same database: LiteLLM on 127.0.0.1:4003 only,
+          # the sidecar on 4002 in front of it, as in the pod. A 5-minute token signed by a
+          # key generated here is exchanged for a virtual key and served; tokens over the
+          # 15-minute ceiling or otherwise invalid get a generic 401; the admin key and a
+          # random key pass through to LiteLLM's own checks. The JWKS is on the runner's
+          # loopback. The sidecar gets only the admin key, never the whole env file.
+          python3 -m venv "${RUNNER_TEMP}/authvenv"
+          grep -E '^(pyjwt|cryptography)' requirements/runtime.txt > "${RUNNER_TEMP}/auth-req.txt"
+          "${RUNNER_TEMP}/authvenv/bin/pip" install --quiet -r "${RUNNER_TEMP}/auth-req.txt"
+          AUTHPY="${RUNNER_TEMP}/authvenv/bin/python"
+          "${AUTHPY}" scripts/ci/auth_smoke.py prepare --dir "${RUNNER_TEMP}/auth" --jwks-port 58000
+          chmod 0644 "${RUNNER_TEMP}/auth/auth.json"
+          grep '^LITELLM_MASTER_KEY=' "${RUNNER_TEMP}/smoke.env" > "${RUNNER_TEMP}/sidecar.env"
+          docker run -d --name smoke-auth-gw --read-only --tmpfs /tmp:rw,size=256m --network host \
+            --env-file "${RUNNER_TEMP}/smoke.env" \
+            -v "${RUNNER_TEMP}/config.yaml:/etc/aegisx9/config.yaml:ro" "${IMG}" \
+            --config /etc/aegisx9/config.yaml --host 127.0.0.1 --port 4003 >/dev/null
+          docker run -d --name smoke-auth --read-only --tmpfs /tmp:rw,size=16m --network host \
+            --env-file "${RUNNER_TEMP}/sidecar.env" -e HOME=/tmp \
+            -e AEGISX9_AUTH_LISTEN_HOST=127.0.0.1 -e AEGISX9_AUTH_LISTEN_PORT=4002 \
+            -e AEGISX9_AUTH_UPSTREAM=http://127.0.0.1:4003 \
+            -e AEGISX9_AUTH_CONFIG=/etc/aegisx9/auth.json \
+            -v "${RUNNER_TEMP}/auth/auth.json:/etc/aegisx9/auth.json:ro" \
+            --entrypoint python "${IMG}" -m aegisx9.auth_proxy >/dev/null
+          up=""
+          for _ in $(seq 1 150); do
+            if curl -fsS --max-time 2 http://127.0.0.1:4002/health/liveliness >/dev/null 2>&1; then
+              up=1; break
+            fi
+            sleep 2
+          done
+          [ -n "${up}" ] || { echo "auth sidecar + gateway did not start"; logs smoke-auth-gw; logs smoke-auth; exit 1; }
+          echo "smoke-auth: gateway is up behind the auth sidecar"
+          LITELLM_MASTER_KEY="$(sed -n 's/^LITELLM_MASTER_KEY=//p' "${RUNNER_TEMP}/smoke.env")" \
+            "${AUTHPY}" scripts/ci/auth_smoke.py check --dir "${RUNNER_TEMP}/auth" --jwks-port 58000 \
+            --base-url http://127.0.0.1:4002 || { logs smoke-auth; logs smoke-auth-gw; exit 1; }
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: aegisx9:ci-${{ github.sha }}
