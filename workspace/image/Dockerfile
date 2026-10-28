@@ -18,7 +18,7 @@
 
 FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac AS tools
 ARG NODE_VERSION=24.22.1
-ARG VAULT_VERSION=2.2.0
+ARG VAULT_VERSION=2.2.1
 # hadolint ignore=DL3008
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -84,8 +84,14 @@ ENV PATH=/opt/node/bin:/opt/aegisx9/bin:/usr/local/bin:/usr/bin:/bin \
     LANG=en_US.UTF-8 \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     NPM_CONFIG_FUND=false
+# npm is a build-time tool only (#99): once Claude Code is installed it is deleted with
+# npx and corepack, so the workspace has no package manager and none of npm's bundled
+# dependencies (undici and others) are in the image.
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
- && npm cache clean --force
+ && npm cache clean --force \
+ && rm -rf /opt/node/lib/node_modules/npm /opt/node/lib/node_modules/corepack \
+      /opt/node/bin/npm /opt/node/bin/npx /opt/node/bin/corepack /opt/node/include \
+      /root/.npm
 
 # The locked baseline: root-owned, read-only for everyone else.
 COPY --chmod=0755 image/hooks/prompt-credential-check.sh image/hooks/pretooluse-guard.sh \
