@@ -45,6 +45,22 @@ gateway:
         defaultModel: claude-sonnet-5-5
     jobs:
       enabled: true
+  # Short-lived JWT login (ADR 0010, #86): the auth sidecar validates identity-provider
+  # access tokens (15 minutes, asymmetric signature) and exchanges each for a virtual key
+  # that expires with it. Issuer and JWKS URL come from the aegisx9-gateway Secret.
+  oidc:
+    enabled: true
+    issuers:
+      - name: idp
+        issuerEnv: AEGIS_JWT_ISSUER
+        jwksUrlEnv: AEGIS_JWT_JWKS_URL
+        audience: aegisx9-staging-gateway
+        userClaim: sub
+        groupsClaim: groups
+        groupTeams:
+          - {group: aegisx9-admins, team: developers}
+          - {group: aegisx9-developers, team: developers}
+        maxLifetimeSeconds: 900
 opsJobs:
   priorityClassName: aegisx9-low
 wif:

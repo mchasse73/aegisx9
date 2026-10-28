@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Staging runs v0.3.1 with the auth sidecar enabled (#86): identity-provider access tokens
+  (15 minutes, RS256, audience `aegisx9-staging-gateway`) are exchanged for virtual keys that
+  expire with them. Callers in either developer group map to the `developers` team. The
+  issuer and JWKS URL come from the gateway Secret (`AEGIS_JWT_ISSUER`,
+  `AEGIS_JWT_JWKS_URL`), not from Git. The provider advertises PKCE but does not enforce it,
+  so clients must always send an S256 `code_challenge`.
+
 ## [0.3.1] - 2026-10-28
 
 ### Fixed
