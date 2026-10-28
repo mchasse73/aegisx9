@@ -3,9 +3,6 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 gateway:
-  oidc:
-    # Set to the identity provider's JWKS URL for the production application.
-    jwksUrl: ""
   budgets:
     proxyMaxBudgetUsd: 20
 affinity:

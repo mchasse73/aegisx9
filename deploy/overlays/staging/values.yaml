@@ -1,8 +1,5 @@
 replicaCount: 1
 gateway:
-  oidc:
-    # Empty on purpose: JWT_PUBLIC_KEY_URL comes from the aegisx9-gateway Secret.
-    jwksUrl: ""
   # Claude models through the federation broker (ADR 0009): no provider key anywhere.
   models:
     - name: claude-sonnet-5-5
