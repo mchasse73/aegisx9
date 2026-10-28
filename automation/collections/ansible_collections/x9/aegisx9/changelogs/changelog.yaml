@@ -1,6 +1,14 @@
 ---
 ancestor: null
 releases:
+  0.3.1:
+    changes:
+      bugfixes:
+        - >-
+          scanner role - with scanner_package_ref v0.3.1 the webhook URL parameter is optional:
+          absent means webhook alerts off and email only, so the scan units start before an
+          Event-Driven Ansible receiver exists (aegisx9 GitHub issue 102).
+    release_date: "2026-10-28"
   0.3.0:
     changes:
       breaking_changes:
