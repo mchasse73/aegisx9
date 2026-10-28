@@ -94,8 +94,7 @@ jobs:
           for scan in -sS -sU; do
             out="$(sudo python3 scripts/ci/scanner_unit_sandbox.py "${unit}" -- \
               /usr/bin/nmap "${scan}" --privileged -Pn -n -p 9 --max-retries 0 \
-              --host-timeout 15s 192.0.2.1 2>&1)"
-            rc=$?
+              --host-timeout 15s 192.0.2.1 2>&1)" && rc=0 || rc=$?
             printf '%s\n' "${out}"
             if [ "${rc}" -ne 0 ] || grep -Eq "can't find interface|route_dst|Operation not permitted" <<<"${out}"; then
               echo "::error::nmap ${scan} failed under ${unit} (rc=${rc})"
@@ -108,12 +107,14 @@ jobs:
           out="$(sudo python3 scripts/ci/scanner_unit_sandbox.py \
             scanner/systemd/aegisx9-scan-daily.service --extra ProcSubset=pid -- \
             /usr/bin/nmap -sS --privileged -Pn -n -p 9 --max-retries 0 \
-            --host-timeout 15s 192.0.2.1 2>&1)"
-          rc=$?
+            --host-timeout 15s 192.0.2.1 2>&1)" && rc=0 || rc=$?
+          # (The runner's shell is `bash -e`: without `|| rc=$?` the expected failure ends the step.)
           printf '%s\n' "${out}"
           if [ "${rc}" -eq 0 ] && ! grep -q "can't find interface" <<<"${out}"; then
             # A probe that cannot fail proves nothing; say so loudly without blocking.
             echo "::warning::ProcSubset=pid did not break nmap on this runner: the positive check above is weaker than intended"
+          else
+            echo "negative control reproduced the original failure (rc=${rc})"
           fi
       - name: the AWS CLI runs under the secrets fetcher's sandbox
         run: |
