@@ -159,6 +159,8 @@ def test_misc_controls(settings: dict[str, Any]) -> None:
     assert settings["disableClaudeAiConnectors"] is True
     assert settings["remoteControlAtStartup"] is False
     assert settings["autoUpdatesChannel"] == "stable"
+    # The image pins Claude Code and ships without npm (#99): no self-update.
+    assert settings["env"]["DISABLE_AUTOUPDATER"] == "1"
     assert settings["skipWebFetchPreflight"] is True
     rules = settings["claudeMd"]
     for phrase in (
