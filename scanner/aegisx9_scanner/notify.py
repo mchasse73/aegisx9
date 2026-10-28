@@ -107,7 +107,7 @@ def verify(secret: bytes, body: bytes, header_value: str) -> bool:
     return hmac.compare_digest(sign(secret, body), header_value.strip())
 
 
-def build_event(report: Report) -> dict[str, Any]:
+def build_event(report: Report, reason: str = "") -> dict[str, Any]:
     return {
         "event": report.event_type,
         "source": "aegisx9-scanner",
@@ -119,6 +119,7 @@ def build_event(report: Report) -> dict[str, Any]:
         "alert_count": len(report.alerting),
         "alerts": [a.to_dict() for a in report.alerting],
         "report_path": report.paths.get("json", ""),
+        "notify_reason": reason,
     }
 
 
@@ -225,15 +226,33 @@ def send_email(
     return ok
 
 
+def subject_for(report: Report, reason: str = "") -> str:
+    if reason == "recovered":
+        label = "RECOVERED"
+    elif report.clean:
+        label = "CLEAN"
+    elif reason == "reminder":
+        label = "ALERT (still failing)"
+    else:
+        label = "ALERT"
+    return f"[aegisx9-scanner] {label}: {report.summary}"
+
+
 def notify(
-    report: Report, markdown: str, cfg: NotifyConfig, *, env: Mapping[str, str] | None = None
+    report: Report,
+    markdown: str,
+    cfg: NotifyConfig,
+    *,
+    env: Mapping[str, str] | None = None,
+    reason: str = "",
 ) -> dict[str, bool]:
-    """Deliver the run outcome. A clean run is sent too: silence must mean 'broken'."""
-    payload = build_event(report)
+    """Deliver the run outcome. Whether a run notifies at all is decided by
+    ``alert_state`` (state changes, a daily reminder, the daily summary); ``reason``
+    says which and is carried in the event and the subject."""
+    payload = build_event(report, reason)
     outcome = {"webhook": post_webhook(payload, cfg, env=env)}
     if cfg.email_enabled:
-        prefix = "[aegisx9-scanner] CLEAN" if report.clean else "[aegisx9-scanner] ALERT"
-        outcome["email"] = send_email(f"{prefix}: {report.summary}", markdown, cfg)
+        outcome["email"] = send_email(subject_for(report, reason), markdown, cfg)
     else:
         outcome["email"] = False
     return outcome

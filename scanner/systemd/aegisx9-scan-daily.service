@@ -28,6 +28,11 @@ ExecStart=/opt/aegisx9-scanner/venv/bin/aegisx9-scan --config /etc/aegisx9-scann
 TimeoutStartSec=3h
 StateDirectory=aegisx9-scanner
 LogsDirectory=aegisx9-scanner
+# systemd re-applies these modes on every start (its default is 0755). They must match
+# aegisx9-scanner.tmpfiles.conf, or each daily run takes group write away from the
+# DynamicUser units (uptime, redteam) and they fail with PermissionError.
+StateDirectoryMode=0770
+LogsDirectoryMode=0770
 WorkingDirectory=/var/lib/aegisx9-scanner
 
 # Hardening
@@ -43,7 +48,10 @@ ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 ProtectProc=invisible
-ProcSubset=pid
+# No ProcSubset=pid here: nmap reads the interface and route tables under /proc/net, and
+# with them hidden it stops with 'route_dst_netlink: can't find interface' and the port
+# scan never runs. ProtectProc=invisible still hides other users' processes.
+# Guarded by tests/scanner/test_scanner_units.py and the CI sandbox check.
 # AF_PACKET/AF_NETLINK: raw-socket scans (-sS/-sU) need them; the other units do not.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_PACKET
 RestrictNamespaces=yes

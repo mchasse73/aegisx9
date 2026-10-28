@@ -127,7 +127,7 @@ def classify(
     prev_scanned = bool(previous and previous.get("ports_scanned"))
 
     if obs.targets is not None:
-        alerts.extend(_refusals(obs.targets.refused))
+        alerts.extend(refusal_alerts(obs.targets.refused))
 
     for entry in registry.expired(today):
         alerts.append(
@@ -301,9 +301,20 @@ def uptime_alerts(results: list[UptimeResult]) -> list[Alert]:
     return alerts
 
 
-def _refusals(refused: list[Refusal]) -> list[Alert]:
+def refusal_alerts(refused: list[Refusal]) -> list[Alert]:
+    """A never-target named in targets.yml (or its dns/uptime lists) is an operator
+    mistake and alerts HIGH. An approved-exposure registry entry that the never-target
+    list also covers is public on purpose and intentionally not scanned: it is reported
+    as INFO so it never turns every run into an ALERT."""
     return [
         Alert(
+            Kind.REFUSED_TARGET,
+            Severity.INFO,
+            r.name,
+            f"{r.source} entry is on the never-target list ({r.rule}): intentionally not scanned",
+        )
+        if r.intentional
+        else Alert(
             Kind.REFUSED_TARGET,
             Severity.HIGH,
             r.name,

@@ -8,7 +8,7 @@ subnet_id         = "subnet-0123456789abcdef0"
 eip_allocation_id = "eipalloc-0123456789abcdef0"
 
 instance_type       = "t3.small"
-volume_size         = 16
+volume_size         = 30
 detailed_monitoring = true
 
 cost_center = "security-external-vantage"
@@ -20,7 +20,11 @@ report_from_email = "scanner@example.com"
 report_email      = "security@example.com"
 
 nuclei_version      = "3.6.0"
-scanner_package_ref = "v0.1.0"
+# Required: a release tag (or full commit SHA) that contains the #96 bootstrap fixes.
+scanner_package_ref = "<release tag, vX.Y.Z>"
+torch_version       = "2.14.1"
+torch_index_url     = "https://download.pytorch.org/whl/cpu"
+garak_version       = "0.17.1"
 
 redteam_target_url = "https://gateway.example.com"
 redteam_model      = "aegisx9-redteam"

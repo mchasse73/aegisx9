@@ -33,6 +33,9 @@ locals {
     aws_region               = local.region
     nuclei_version           = var.nuclei_version
     scanner_package_ref      = var.scanner_package_ref
+    torch_version            = var.torch_version
+    torch_index_url          = var.torch_index_url
+    garak_version            = var.garak_version
     webhook_url_parameter    = var.webhook_url_parameter
     webhook_secret_parameter = var.webhook_secret_parameter
     tunnel_secret_parameter  = var.tunnel_secret_parameter

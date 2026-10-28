@@ -8,8 +8,9 @@
 set -euo pipefail
 umask 077
 
-CONF=/etc/aegisx9-scanner/env-source.conf
-DIR=/etc/aegisx9-scanner
+# The directory is overridable only so the tests can run this script unprivileged.
+DIR="${AEGISX9_SCANNER_ENV_DIR:-/etc/aegisx9-scanner}"
+CONF="${DIR}/env-source.conf"
 if [ ! -r "${CONF}" ]; then
   echo "aegisx9-scanner-env: ${CONF} missing" >&2
   exit 2
@@ -22,28 +23,128 @@ fi
 : "${TUNNEL_SECRET_PARAMETER:?}" "${REDTEAM_KEY_PARAMETER:?}"
 export AWS_REGION
 
-# fetch <parameter name> <destination file>
-# The value travels from the AWS CLI's stdout straight into the file (0600, root).
-# A missing optional parameter leaves an empty file so the scan units still start.
-fetch() {
-  local name="$1" dest="$2" tmp
-  tmp="$(mktemp "${DIR}/.fetch.XXXXXX")"
-  if aws ssm get-parameter --with-decryption --name "${name}" \
-      --query Parameter.Value --output text > "${tmp}" 2>/dev/null; then
-    # strip the trailing newline the CLI adds
-    printf '%s' "$(cat "${tmp}")" > "${tmp}"
-  else
-    echo "aegisx9-scanner-env: parameter not readable: ${name} (continuing with empty value)" >&2
-    : > "${tmp}"
-  fi
-  chmod 0600 "${tmp}"
-  mv -f "${tmp}" "${dest}"
+# log <level> <message>: one JSON line per event, like the scanner. Parameter NAMES only;
+# a value, and the AWS CLI's own error text, never reach a log line.
+log() {
+  printf '{"level":"%s","logger":"aegisx9-scanner-env","msg":"%s"}\n' "$1" "$2" >&2
 }
 
-fetch "${WEBHOOK_SECRET_PARAMETER}" "${DIR}/webhook_secret"
-fetch "${TUNNEL_SECRET_PARAMETER}"  "${DIR}/tunnel_secret"
-fetch "${REDTEAM_KEY_PARAMETER}"    "${DIR}/redteam_key"
-fetch "${WEBHOOK_URL_PARAMETER}"    "${DIR}/webhook_url"
+failed=0
+# Seconds to wait between attempts on a transient error: 5 attempts over about two
+# minutes. Overridable only so the tests do not sleep.
+read -r -a RETRY_DELAYS <<< "${AEGISX9_SCANNER_ENV_RETRY_DELAYS:-8 15 30 60}"
+
+# fetch_once <parameter name> <file>: one read into <file>. Prints the outcome:
+# ok | empty | absent (ParameterNotFound) | access_denied | fetch_failed. The AWS CLI's
+# error text is classified and discarded, never logged.
+fetch_once() {
+  local name="$1" out="$2" errf result
+  errf="$(mktemp "${DIR}/.fetch-err.XXXXXX")"
+  if aws ssm get-parameter --with-decryption --name "${name}" \
+      --query Parameter.Value --output text > "${out}" 2> "${errf}"; then
+    # strip the trailing newline the CLI adds
+    printf '%s' "$(cat "${out}")" > "${out}"
+    if [ -s "${out}" ]; then result=ok; else result=empty; fi
+  elif grep -q '(ParameterNotFound)' "${errf}"; then
+    result=absent
+  elif grep -q '(AccessDenied' "${errf}"; then
+    result=access_denied
+  else
+    result=fetch_failed
+  fi
+  rm -f "${errf}"
+  printf '%s' "${result}"
+}
+
+# fetch <required|optional> <parameter name> <destination file>
+# The value travels from the AWS CLI's stdout straight into the file (0600, root).
+# A transient error (access denied while the instance role settles, a network or CLI
+# failure) is retried with backoff. Then:
+#  * required, absent or empty: the destination is removed (never left empty) and the
+#    script fails, so the scan units (Requires=) do not start on a missing secret.
+#  * required, still transient: an existing non-empty file from an earlier fetch is
+#    kept (error logged); with no good file the script fails.
+#  * optional: absent is informational and leaves an empty file so the units'
+#    LoadCredential= still finds it; a transient error keeps an existing non-empty
+#    file, else leaves an empty one, and is logged as an error without failing.
+fetch() {
+  local need="$1" name="$2" dest="$3" tmp result attempt=0
+  tmp="$(mktemp "${DIR}/.fetch.XXXXXX")"
+  while :; do
+    result="$(fetch_once "${name}" "${tmp}")"
+    case "${result}" in ok | empty | absent) break ;; esac
+    if [ "${attempt}" -ge "${#RETRY_DELAYS[@]}" ]; then
+      break
+    fi
+    log warning "parameter read failed (${result}), retrying in ${RETRY_DELAYS[${attempt}]}s: ${name}"
+    sleep "${RETRY_DELAYS[${attempt}]}"
+    attempt=$((attempt + 1))
+  done
+
+  if [ "${result}" = ok ]; then
+    chmod 0600 "${tmp}"
+    mv -f "${tmp}" "${dest}"
+    log info "parameter fetched: ${name}"
+    return 0
+  fi
+  rm -f "${tmp}"
+  case "${need}:${result}" in
+    required:absent | required:empty)
+      rm -f "${dest}"
+      log error "required parameter not readable (${result}): ${name}"
+      failed=1
+      ;;
+    required:*)
+      if [ -s "${dest}" ]; then
+        log error "required parameter not readable (${result}) after retries, kept the previous value: ${name}"
+      else
+        rm -f "${dest}"
+        log error "required parameter not readable (${result}) after retries: ${name}"
+        failed=1
+      fi
+      ;;
+    optional:absent | optional:empty)
+      log info "optional parameter ${result}: ${name} (empty file)"
+      empty_file "${dest}"
+      ;;
+    *)
+      if [ -s "${dest}" ]; then
+        log error "optional parameter not readable (${result}) after retries, kept the previous value: ${name}"
+      else
+        log error "optional parameter not readable (${result}) after retries: ${name} (empty file)"
+        empty_file "${dest}"
+      fi
+      ;;
+  esac
+}
+
+empty_file() {
+  local tmp
+  tmp="$(mktemp "${DIR}/.fetch.XXXXXX")"
+  chmod 0600 "${tmp}"
+  mv -f "${tmp}" "$1"
+}
+
+if ! command -v aws >/dev/null 2>&1; then
+  log error "aws cli not found: no parameter can be read"
+  exit 1
+fi
+
+# The red-team key is required only when a red-team target is configured.
+redteam_need=optional
+if [ -n "${REDTEAM_TARGET_URL:-}" ]; then
+  redteam_need=required
+fi
+
+fetch required "${WEBHOOK_SECRET_PARAMETER}" "${DIR}/webhook_secret"
+fetch required "${WEBHOOK_URL_PARAMETER}"    "${DIR}/webhook_url"
+fetch optional "${TUNNEL_SECRET_PARAMETER}"  "${DIR}/tunnel_secret"
+fetch "${redteam_need}" "${REDTEAM_KEY_PARAMETER}" "${DIR}/redteam_key"
+
+if [ "${failed}" -ne 0 ]; then
+  log error "required parameters missing: the scan units will not start"
+  exit 1
+fi
 
 # Non-secret environment for the scan units. The secret *_FILE paths are set by the
 # units themselves (LoadCredential=), not here, so this file never names a secret.
@@ -66,4 +167,4 @@ tmp_env="$(mktemp "${DIR}/.env.XXXXXX")"
 } > "${tmp_env}"
 chmod 0600 "${tmp_env}"
 mv -f "${tmp_env}" "${DIR}/env"
-echo "aegisx9-scanner-env: secrets refreshed into ${DIR} (0600 root)"
+log info "secrets refreshed into ${DIR} (0600 root)"

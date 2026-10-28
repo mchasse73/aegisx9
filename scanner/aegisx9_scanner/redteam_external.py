@@ -23,6 +23,7 @@ from pathlib import Path
 
 from aegisx9_scanner.checks import CommandResult, find_tool, run_command
 from aegisx9_scanner.diff import Alert, Kind, Severity
+from aegisx9_scanner.fsutil import ensure_group_dir
 from aegisx9_scanner.log import error_name, event
 
 PROMPTFOO_VERSION = "0.124.1"
@@ -230,7 +231,7 @@ def run_redteam(
         outcome.alerts.append(_incomplete("no red-team key file configured"))
         return outcome
 
-    work_dir.mkdir(parents=True, exist_ok=True)
+    ensure_group_dir(work_dir)
     run_dir = Path(tempfile.mkdtemp(prefix="run-", dir=work_dir))  # fresh and 0700
     outcome.run_dir = run_dir
     base_env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "TMPDIR")}

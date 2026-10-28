@@ -14,6 +14,7 @@ from typing import Any
 
 from aegisx9_scanner import __version__
 from aegisx9_scanner.diff import Alert, Severity
+from aegisx9_scanner.fsutil import ensure_group_dir
 
 SNAPSHOT_FILE = "snapshot.json"
 LAST_REPORT_FILE = "last_report.json"
@@ -131,14 +132,15 @@ def _cell(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
 
 
-def _write_private(path: Path, text: str) -> None:
-    """Write a 0600 file atomically: a private temporary file in the same directory,
-    then ``os.replace``. The three units run as different users and share
-    ``last_report.json``; replacing the directory entry needs only a writable
-    directory, whereas truncating another user's 0600 file would fail."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+def write_atomic(path: Path, text: str, *, mode: int = 0o600) -> None:
+    """Write a file atomically (``0600`` unless ``mode`` says otherwise): a private
+    temporary file in the same directory, then ``os.replace``. The three units run as
+    different users and share ``last_report.json``; replacing the directory entry needs
+    only a writable directory, whereas truncating another user's 0600 file would fail."""
+    ensure_group_dir(path.parent)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
+        os.fchmod(fd, mode)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
         os.replace(tmp, path)
@@ -154,10 +156,10 @@ def write_report(report: Report, state_dir: Path) -> tuple[Path, Path]:
     json_path = base / f"{stem}.json"
     md_path = base / f"{stem}.md"
     report.paths = {"json": str(json_path), "markdown": str(md_path)}
-    _write_private(json_path, json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n")
-    _write_private(md_path, render_markdown(report))
+    write_atomic(json_path, json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n")
+    write_atomic(md_path, render_markdown(report))
     if not report.dry_run:
-        _write_private(
+        write_atomic(
             state_dir / LAST_REPORT_FILE, json.dumps(report.to_dict(), sort_keys=True) + "\n"
         )
     return json_path, md_path
@@ -180,5 +182,5 @@ def save_snapshot(
     path = state_dir / SNAPSHOT_FILE
     doc = dict(snapshot)
     doc["saved_at"] = (now or datetime.now(UTC)).isoformat(timespec="seconds")
-    _write_private(path, json.dumps(doc, indent=2, sort_keys=True) + "\n")
+    write_atomic(path, json.dumps(doc, indent=2, sort_keys=True) + "\n")
     return path

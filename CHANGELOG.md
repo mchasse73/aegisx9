@@ -46,6 +46,26 @@ All notable changes to this project are documented here. The format follows
   and can't be fixed while LiteLLM requires filelock<4.0; removed once it allows 4.2.1.
   The workspace image ignores the undici advisory in Node.js 24.22.1's bundled copy until
   the next Node 24 LTS release (closes #88).
+- External vantage scanner deploy defects found on an Ubuntu 24.04 rebuild: the bootstrap
+  installs the AWS CLI v2 from the official zip with its PGP signature verified (the
+  `awscli` package doesn't exist on noble and the snap can't run in the secrets fetcher's
+  sandbox); the package installs with the PEP 508 `aegisx9[scanner] @ git+...` form, from a
+  now-required `scanner_package_ref` (release tag or commit SHA), with CPU-only torch and no
+  pip cache, on a 30 GiB root volume; the secrets fetcher fails, with an error naming the
+  parameter and without leaving an empty file, when a required parameter can't be read; the
+  daily unit drops `ProcSubset=pid` (nmap needs `/proc/net`) and sets
+  `StateDirectoryMode`/`LogsDirectoryMode=0770` so the uptime and red-team units can write
+  the shared state directory; the fetcher retries transient read errors and keeps the
+  last good value, restarts itself on failure, and a failure no longer stops the timers
+  from being enabled at bootstrap; the AWS CLI check also rejects expired or revoked keys;
+  the role installs the package once per ref change (dependencies included) against a
+  `+cpu` torch constraint, replaces a CUDA torch it finds, and re-runs the fetcher when it
+  changes; uptime and red-team notify on a change of state (24-hour
+  reminder, one recovery notice) instead of every run, registry entries that the
+  never-target list covers are reported as intentionally not scanned (a never-target in
+  targets.yml still alerts and fails `validate-config`), and the daily scan still sends
+  its daily summary. Unit-file lint tests
+  and a CI job that runs nmap under the daily unit's sandbox guard the units (refs #96).
 
 ## [0.2.0] - 2026-10-22
 

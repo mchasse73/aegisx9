@@ -2,12 +2,14 @@
 - name: Validate role inputs
   ansible.builtin.assert:
     that:
-      - scanner_package_ref is match('^v[0-9]+\.[0-9]+\.[0-9]+$')
+      - scanner_package_ref is match('^(v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{40})$')
+      - scanner_torch_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
       - scanner_approved_registry_path | length > 0
       - scanner_targets is mapping
       - scanner_never_target is mapping
     fail_msg: >-
-      scanner_package_ref must be a vX.Y.Z tag, scanner_approved_registry_path must point at
+      scanner_package_ref must be a vX.Y.Z release tag or a full commit SHA (a release
+      containing the #96 fixes), scanner_approved_registry_path must point at
       the approved-exposure registry from the platform operations checkout, and
       scanner_targets / scanner_never_target must be mappings
     quiet: true
@@ -42,14 +44,116 @@
 - name: Flush handlers so the user and directories exist before the package install
   ansible.builtin.meta: flush_handlers
 
-- name: Install or update the scanner package at the pinned tag (plus garak for the red-team unit)
+- name: Require the signature-verified AWS CLI v2 installed by cloud-init
+  # The secrets fetcher needs it. Ubuntu 24.04 has no awscli package and the snap cannot
+  # run inside the fetcher's sandbox (NoNewPrivileges, RestrictNamespaces), so only the
+  # official installer at /usr/local/bin/aws is accepted (infra/scanner/cloud-init.sh.tftpl).
+  ansible.builtin.stat:
+    path: /usr/local/bin/aws
+  register: scanner_aws_cli
+
+- name: Fail when the AWS CLI is missing
+  ansible.builtin.assert:
+    that:
+      - scanner_aws_cli.stat.exists
+    fail_msg: >-
+      /usr/local/bin/aws is missing: install the AWS CLI v2 from the official, signature-verified
+      zip (as the cloud-init bootstrap does), not the snap
+    quiet: true
+
+- name: Inspect the venv (torch build, installed scanner ref)
+  # Prints one JSON object: torch is "absent", "cpu" or "non-cpu" (a CUDA build left by an
+  # older deploy satisfies the same version pin, so the version alone is not enough), and
+  # the ref the installed aegisx9 package came from. A missing venv reads as all-absent.
+  ansible.builtin.command:
+    argv:
+      - "{{ scanner_venv }}/bin/python"
+      - -c
+      - |
+        import importlib.metadata as m, json
+        out = {"torch": "absent", "aegisx9_ref": ""}
+        try:
+            v = m.version("torch")
+        except m.PackageNotFoundError:
+            pass
+        else:
+            cuda = ""
+            try:
+                import torch
+                cuda = getattr(torch.version, "cuda", None) or ""
+            except Exception:
+                cuda = "unknown"
+            out["torch"] = "cpu" if v.endswith("+cpu") and not cuda else "non-cpu"
+        try:
+            d = m.distribution("aegisx9")
+        except m.PackageNotFoundError:
+            pass
+        else:
+            du = json.loads(d.read_text("direct_url.json") or "{}")
+            out["aegisx9_ref"] = du.get("vcs_info", {}).get("requested_revision", "")
+        print(json.dumps(out))
+  register: scanner_venv_probe
+  changed_when: false
+  failed_when: false
+
+- name: Read the probe result
+  ansible.builtin.set_fact:
+    scanner_venv_state: >-
+      {{ (scanner_venv_probe.stdout | from_json)
+         if (scanner_venv_probe.rc | default(1)) == 0
+         else {'torch': 'absent', 'aegisx9_ref': ''} }}
+
+- name: Install torch from the CPU-only index (replacing a CUDA build if one is there)
   ansible.builtin.pip:
     name:
-      - "git+https://github.com/mchasse73/aegisx9@{{ scanner_package_ref }}#egg=aegisx9[scanner]"
-      - "garak=={{ scanner_garak_version }}"
+      - "torch=={{ scanner_torch_version }}+cpu"
     virtualenv: "{{ scanner_venv }}"
     virtualenv_command: python3 -m venv
-    state: forcereinstall
+    extra_args: "--no-cache-dir --index-url {{ scanner_torch_index_url }}"
+    state: "{{ 'forcereinstall' if scanner_venv_state.torch == 'non-cpu' else 'present' }}"
+
+- name: Pin the CPU torch build for every later install
+  # torch==X.Y.Z+cpu exists only on the CPU index, so no later install can swap in the
+  # CUDA build from PyPI: it fails instead.
+  ansible.builtin.copy:
+    dest: "{{ scanner_venv }}/constraints.txt"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      torch=={{ scanner_torch_version }}+cpu
+
+- name: Install garak for the red-team unit (against the pinned CPU torch)
+  ansible.builtin.pip:
+    name:
+      - "garak=={{ scanner_garak_version }}"
+    virtualenv: "{{ scanner_venv }}"
+    extra_args: "--no-cache-dir -c {{ scanner_venv }}/constraints.txt"
+    state: present
+
+- name: Remove the installed scanner package when the pinned ref changed
+  # pip treats a direct-URL requirement whose version is already installed as satisfied
+  # and would neither reinstall it nor add its new dependencies; removing the one dist
+  # first makes the install below a clean install of the new ref, built once. A build
+  # with no recorded git ref (a wheel or local checkout) counts as changed too; pip
+  # uninstall of an absent dist only warns, so a fresh venv is fine.
+  ansible.builtin.command:
+    argv: ["{{ scanner_venv }}/bin/pip", uninstall, --yes, aegisx9]
+  register: scanner_uninstall
+  when: scanner_venv_state.aegisx9_ref != scanner_package_ref or scanner_force_reinstall | bool
+  changed_when: "'Successfully uninstalled' in scanner_uninstall.stdout"
+
+- name: Install the scanner package at the pinned ref, with its dependencies
+  ansible.builtin.pip:
+    name:
+      # PEP 508 direct reference: pip rejects extras in a #egg= fragment.
+      - "aegisx9[scanner] @ git+https://github.com/mchasse73/aegisx9@{{ scanner_package_ref }}"
+    virtualenv: "{{ scanner_venv }}"
+    extra_args: >-
+      --no-cache-dir --upgrade-strategy only-if-needed -c {{ scanner_venv }}/constraints.txt
+    state: present
+  when: >-
+    scanner_venv_state.aegisx9_ref != scanner_package_ref or scanner_force_reinstall | bool
 
 - name: Install the red-team suites (promptfoo and garak configs) from the project checkout
   ansible.builtin.copy:
@@ -66,6 +170,7 @@
     owner: root
     group: root
     mode: "0700"
+  register: scanner_fetcher_script
 
 - name: Install the systemd units and timers
   ansible.builtin.copy:
@@ -75,6 +180,7 @@
     group: root
     mode: "0644"
   loop: "{{ scanner_units }}"
+  register: scanner_units_copy
   notify: Reload systemd
 
 - name: Ensure the configuration directory exists
@@ -125,15 +231,25 @@
 - name: Flush handlers so systemd sees the units before they are enabled
   ansible.builtin.meta: flush_handlers
 
-- name: Enable the boot-time secrets fetcher
+- name: Enable the boot-time secrets fetcher at boot
   ansible.builtin.systemd_service:
     name: aegisx9-scanner-env.service
     enabled: true
-    state: started
 
 - name: Enable the scan timers
+  # Enabled whatever the fetcher's outcome: each scan unit Requires= the fetcher, so a
+  # timer never runs a scan with missing secrets, and the first run after a successful
+  # fetch works.
   ansible.builtin.systemd_service:
     name: "{{ item }}"
     enabled: true
     state: started
   loop: "{{ scanner_timers }}"
+
+- name: Run the secrets fetcher (re-run when the fetcher or a unit changed)
+  # A oneshot with RemainAfterExit=yes stays "active" after its first run, so
+  # state=started would never run a fixed fetcher on an existing host and old empty
+  # secret files would stay. Restart it whenever the script or a unit changed.
+  ansible.builtin.systemd_service:
+    name: aegisx9-scanner-env.service
+    state: "{{ 'restarted' if (scanner_fetcher_script is changed or scanner_units_copy is changed) else 'started' }}"

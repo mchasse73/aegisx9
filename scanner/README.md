@@ -30,8 +30,10 @@ every allow-list:
    reachability/latency every five minutes.
 
 Everything feeds one report and one alert path. A run with no alerts still produces a
-dated **clean** report and a `clean` event: silence means the scanner is broken, never
-that the surface is fine.
+dated **clean** report, and the daily scan sends its result every day, `clean` included:
+silence from it means the scanner is broken, never that the surface is fine. The
+five-minute uptime probe and the weekly red-team run notify on a change of state only
+(see "When a notification is sent").
 
 ## Approved-exposure registry
 
@@ -57,7 +59,13 @@ the scanner never widens them.
 patterns in it are refused wherever they come from (`targets.yml`, the registry, a DNS or
 uptime entry, or `--target-url`): they are not resolved, scanned, probed or red-teamed.
 A hostname that resolves into a forbidden CIDR is refused too, and every refusal is
-logged and reported as `REFUSED_TARGET` so the configuration gets fixed. The list is
+logged and reported as `REFUSED_TARGET`. There are two kinds:
+
+- a never-target named in `targets.yml` (hosts, CIDRs, DNS or uptime entries) is an
+  operator mistake: `high`, it alerts, and `validate-config` exits `2`;
+- an approved-exposure registry entry that the never-target list also covers is public on
+  purpose (a live-trading endpoint) and **intentionally not scanned**: `info`, reported
+  but never an alert on its own, and `validate-config` accepts it. The list is
 also passed to nmap as `--exclude`.
 
 **Live-trading endpoints are never scanned or loaded.** They belong in this file.
@@ -75,7 +83,8 @@ also passed to nmap as `--exclude`.
 | `DNS_DRIFT` | high | A named record does not answer exactly what is expected |
 | `APPROVED_PORT_OPENED` / `PORT_CLOSED` | medium | An approved port that was not open last run, or a port that closed since: a change is reported even when it is approved, so "clean" means nothing moved |
 | `DOWN` / `DEGRADED` | high / low | Endpoint unreachable or wrong status / slower than its budget |
-| `EXPIRED_APPROVAL`, `REFUSED_TARGET`, `CHECK_INCOMPLETE` | medium, high, low-medium | Registry hygiene, never-target hits, a check that could not complete |
+| `EXPIRED_APPROVAL`, `CHECK_INCOMPLETE` | medium, low-medium | Registry hygiene, a check that could not complete |
+| `REFUSED_TARGET` | high (targets.yml), info (registry entry) | A never-target was not touched: an operator mistake in targets.yml, or a registry entry intentionally not scanned |
 | `REDTEAM_REGRESSION` | high | promptfoo attack succeeded or a garak family fell below its threshold |
 
 `settings.alert_min_severity` (default `medium`; `AEGISX9_SCANNER_ALERT_MIN_SEVERITY`
@@ -104,7 +113,10 @@ template pass; both are optional and their absence is reported as a note). Exit 
 
 Reports land in `<state>/reports/<date>/<mode>-<time>-<run id>.{json,md}`; the latest is
 copied to `<state>/last_report.json`; `<state>/snapshot.json` is what the next daily run
-diffs against. All files are created `0600`.
+diffs against. Reports and the snapshot are created `0600`; `<state>/notify/<job>.json`
+(the last notified state, no secrets) is `0660`. Every subdirectory the scanner creates
+is `0770` whatever the umask, because the three units share the state directory through
+the scanner group.
 
 ## How alerts flow
 
@@ -119,11 +131,25 @@ aegisx9-scan daily/uptime/redteam
 ```
 
 The webhook body is JSON (`event`, `source`, `version`, `run_id`, `mode`, `timestamp`,
-`summary`, `alert_count`, `alerts[]`, `report_path`) and is signed with HMAC-SHA256 over
+`summary`, `alert_count`, `alerts[]`, `report_path`, `notify_reason`) and is signed with HMAC-SHA256 over
 the exact bytes. The key is read from the `0600` file named by
 `AEGISX9_SCANNER_WEBHOOK_SECRET_FILE` (or from `AEGISX9_SCANNER_WEBHOOK_SECRET`), never
 from a command line. Email uses `boto3` when it is importable, otherwise the AWS CLI with
 the request on stdin. Errors are logged by exception type only.
+
+### When a notification is sent
+
+Each job keeps the state it last notified in `<state>/notify/<job>.json`.
+
+| Job | Notifies when | Subject |
+|---|---|---|
+| `daily` | every run (the heartbeat; `notify_reason` `summary`), or `recovered` after a notified failure | `CLEAN` / `ALERT` / `RECOVERED` |
+| `uptime`, `redteam` | the set of alerting findings (kind, target, port) differs from the one last notified (`alert`, `changed`); the same failure is still there 24 hours after the last notice (`reminder`); clean again after a notified failure, once (`recovered`) | `ALERT` / `ALERT (still failing)` / `RECOVERED` |
+
+A clean run after a clean run is silent for `uptime` and `redteam`; their reports are
+still written. The state is recorded only after a channel accepted the notice, so a
+failed delivery is retried on the next run. Details that change every run (latency, a
+status text) do not count as a new state.
 
 ## Red-team from outside
 
@@ -140,10 +166,10 @@ the weekly unit exits clean with a note.
 
 | Piece | Where |
 |---|---|
-| Package and venv | `/opt/aegisx9-scanner/venv/bin/aegisx9-scan`, installed from a pinned release tag |
+| Package and venv | `/opt/aegisx9-scanner/venv/bin/aegisx9-scan`, installed from a pinned release tag or commit SHA as `aegisx9[scanner] @ git+https://github.com/mchasse73/aegisx9@<ref>`, with CPU-only torch for garak and no pip cache |
 | Configuration | `/etc/aegisx9-scanner/{approved_public,targets,never_target}.yml` and the non-secret `env` file (0600) |
-| Secrets | Fetched at boot from the cloud parameter store by `aegisx9-scanner-env.service` into `0600` root files, handed to the units with systemd `LoadCredential=`; never in user-data, never on argv |
-| Units | `systemd/`: `aegisx9-scan-daily` (08:00 America/New_York; static user with `CAP_NET_RAW CAP_NET_ADMIN` for raw scans), `aegisx9-scan-uptime` (every 5 min, `DynamicUser`), `aegisx9-scan-redteam` (weekly, `DynamicUser`); all `ProtectSystem=strict`, `PrivateTmp`, `NoNewPrivileges` |
+| Secrets | Fetched at boot from the cloud parameter store by `aegisx9-scanner-env.service` (AWS CLI v2 from the signature-verified official installer; the snap cannot run in its sandbox) into `0600` root files, handed to the units with systemd `LoadCredential=`; never in user-data, never on argv. The webhook URL and HMAC key are **required**, and so is the red-team key when a red-team target is set: a transient read error is retried (5 attempts over about two minutes) and then keeps the last good value; a parameter that is absent or empty, or a transient error with no good value on disk, fails the service with an error naming the parameter (never its value), leaves no empty file, and the scan units (`Requires=`) do not start. The unit restarts itself on failure (`Restart=on-failure`, at most 5 starts in 30 minutes), the timers stay enabled, and the first timer run after a successful fetch works. An absent optional parameter (the tunnel credential) is logged as info and leaves an empty file. The deploy role re-runs the fetcher whenever the script or a unit changed |
+| Units | `systemd/`: `aegisx9-scan-daily` (08:00 America/New_York; static user with `CAP_NET_RAW CAP_NET_ADMIN` for raw scans), `aegisx9-scan-uptime` (every 5 min, `DynamicUser`), `aegisx9-scan-redteam` (weekly, `DynamicUser`); all `ProtectSystem=strict`, `PrivateTmp`, `NoNewPrivileges`, `ProtectProc=invisible`. `ProcSubset=pid` only on the uptime unit: nmap needs `/proc/net`, and Node.js and torch read `/proc/stat`, `/proc/cpuinfo` and `/proc/meminfo`. The daily unit sets `StateDirectoryMode=0770` and `LogsDirectoryMode=0770` to match the tmpfiles file; without them each start reset the directory to `0755` and the other units lost write access. `tests/scanner/test_scanner_units.py` and the CI job `scanner-sandbox` (nmap under the daily unit's parsed sandbox) guard both |
 | Infrastructure | `infra/scanner/` (Terraform, applied by platform operations through Terraform Enterprise): t3.small, Ubuntu 24.04 from the public SSM parameter, IMDSv2, encrypted root, no inbound security-group rules (Session Manager only), least-privilege role, existing elastic IP by association |
 | Deployment | `automation/playbooks/scanner_deploy.yml` (role `x9.aegisx9.scanner`, over the Session Manager connection) |
 | Response | `extensions/eda/rulebooks/aegisx9_security_events.yml`, role `x9.aegisx9.exposure_change` |
