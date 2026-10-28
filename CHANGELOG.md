@@ -31,8 +31,9 @@ All notable changes to this project are documented here. The format follows
   clears two new undici advisories (certificate-validation bypass, TLS renegotiation DoS)
   that no Node 24 release fixes yet, and four older npm ignore entries. Claude Code's
   self-update is off (`DISABLE_AUTOUPDATER`), because the signed image pins its version.
-  The Vault CLI moves to 2.2.1. Developers no longer have `npm` in the workspace (owner
-  decision, closes #99).
+  The Vault CLI moves to 2.2.1, which still bundles go-jose 4.1.5: its JWK-parsing DoS
+  advisory has a documented ignore entry until the next Vault release. Developers no
+  longer have `npm` in the workspace (owner decision, closes #99).
 - The gateway image no longer contains `litellm-enterprise`, a proprietary package that
   `litellm[proxy]` pulls in (production use needs a BerriAI subscription; redistribution is
   not allowed). LiteLLM runs without it; the image job fails if it ever comes back

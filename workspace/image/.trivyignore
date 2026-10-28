@@ -7,3 +7,10 @@
 # upstream release and ships with the vulnerable Go standard library; the CLI only talks
 # to the company's Vault over TLS it already trusts. Re-evaluate at the next Vault release.
 CVE-2026-111943
+
+# 2026-10-28 (#99): usr/local/bin/vault (gobinary), go-jose v4.1.5 (fixed in 4.1.6): a
+# DoS when parsing JWKs that contain RSA keys. Vault 2.2.1, the latest release, still
+# ships 4.1.5. In the workspace the CLI only reads secrets and logs in to the company's
+# Vault over trusted TLS; it does not parse untrusted JWK sets, so the worst case is
+# one developer's CLI command failing. Re-evaluate at the next Vault release.
+CVE-2026-116587
