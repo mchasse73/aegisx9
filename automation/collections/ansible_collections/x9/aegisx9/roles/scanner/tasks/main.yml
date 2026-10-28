@@ -134,13 +134,14 @@
 - name: Remove the installed scanner package when the pinned ref changed
   # pip treats a direct-URL requirement whose version is already installed as satisfied
   # and would neither reinstall it nor add its new dependencies; removing the one dist
-  # first makes the install below a clean install of the new ref, built once.
+  # first makes the install below a clean install of the new ref, built once. A build
+  # with no recorded git ref (a wheel or local checkout) counts as changed too; pip
+  # uninstall of an absent dist only warns, so a fresh venv is fine.
   ansible.builtin.command:
     argv: ["{{ scanner_venv }}/bin/pip", uninstall, --yes, aegisx9]
-  when:
-    - scanner_venv_state.aegisx9_ref | length > 0
-    - scanner_venv_state.aegisx9_ref != scanner_package_ref or scanner_force_reinstall | bool
-  changed_when: true
+  register: scanner_uninstall
+  when: scanner_venv_state.aegisx9_ref != scanner_package_ref or scanner_force_reinstall | bool
+  changed_when: "'Successfully uninstalled' in scanner_uninstall.stdout"
 
 - name: Install the scanner package at the pinned ref, with its dependencies
   ansible.builtin.pip:
