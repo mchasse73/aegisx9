@@ -136,8 +136,16 @@ if [ -n "${REDTEAM_TARGET_URL:-}" ]; then
   redteam_need=required
 fi
 
-fetch required "${WEBHOOK_SECRET_PARAMETER}" "${DIR}/webhook_secret"
-fetch required "${WEBHOOK_URL_PARAMETER}"    "${DIR}/webhook_url"
+# The webhook is optional until an Event-Driven Ansible receiver exists (#102): with no
+# URL, alerts go by email only. Its HMAC secret is required only when a URL is set.
+fetch optional "${WEBHOOK_URL_PARAMETER}" "${DIR}/webhook_url"
+webhook_need=optional
+if [ -s "${DIR}/webhook_url" ]; then
+  webhook_need=required
+else
+  log info "no webhook url: webhook alerts off, email only"
+fi
+fetch "${webhook_need}" "${WEBHOOK_SECRET_PARAMETER}" "${DIR}/webhook_secret"
 fetch optional "${TUNNEL_SECRET_PARAMETER}"  "${DIR}/tunnel_secret"
 fetch "${redteam_need}" "${REDTEAM_KEY_PARAMETER}" "${DIR}/redteam_key"
 

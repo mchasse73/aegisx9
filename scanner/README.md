@@ -137,6 +137,11 @@ the exact bytes. The key is read from the `0600` file named by
 from a command line. Email uses `boto3` when it is importable, otherwise the AWS CLI with
 the request on stdin. Errors are logged by exception type only.
 
+The webhook is optional until an Event-Driven Ansible receiver exists: when the URL
+parameter is absent, `aegisx9-scanner-env` logs `no webhook url: webhook alerts off, email
+only` at INFO, the scan units still start, and alerts go by email only. The HMAC secret is
+required only when a URL is set.
+
 ### When a notification is sent
 
 Each job keeps the state it last notified in `<state>/notify/<job>.json`.
