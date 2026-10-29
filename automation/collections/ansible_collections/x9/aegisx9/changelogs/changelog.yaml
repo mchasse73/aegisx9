@@ -1,6 +1,13 @@
 ---
 ancestor: null
 releases:
+  0.4.0:
+    changes:
+      trivial:
+        - >-
+          No changes to the collection's roles; version aligned with the AegisX9 release
+          (auth sidecar configuration from the Secret, scope ADRs 0011-0014).
+    release_date: "2026-10-29"
   0.3.1:
     changes:
       bugfixes:

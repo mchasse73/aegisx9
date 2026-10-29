@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-29
+
 ### Added
 - Auth sidecar: an issuer's `audience` and its group-to-team mapping can now come from the
   gateway Secret (`audienceEnv`, and `groupTeamsEnv` holding ordered `group=team` pairs
