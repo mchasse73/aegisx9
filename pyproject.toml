@@ -33,6 +33,7 @@ dev = [
 ]
 
 [project.scripts]
+aegisx9-login = "aegisx9.login:main"
 aegisx9-scan = "aegisx9_scanner.cli:main"
 
 [tool.hatch.version]

@@ -6,16 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-### Fixed
-- Scanner root volume tags are now part of the launch request (`volume_tags`) instead of a
-  CreateTags after launch, which the deploy role is not granted (#124); in-place volume tag
-  changes are ignored and take effect on the next instance replacement.
+### Added
+- `aegisx9-login`, a developer CLI that gets a short-lived gateway token (#122): OIDC
+  authorization code with PKCE (S256) against a public client and a loopback redirect, an
+  https-only discovery whose issuer must match exactly, single-use `state`, and the access
+  token written to a 0600 file by atomic replace. It never prints the token, only its
+  remaining lifetime, and reports errors by exception type only.
 
 ### Changed
 - Staging runs v0.4.0 with the auth sidecar enabled (#86): callers present identity-provider
   access tokens of at most 15 minutes, which the sidecar exchanges for virtual keys that
   expire with them. The issuer, JWKS URL, audience and group-to-team mapping are read from
   the gateway Secret, so the public overlay holds no identity-provider details.
+
+### Fixed
+- Scanner root volume tags are now part of the launch request (`volume_tags`) instead of a
+  CreateTags after launch, which the deploy role is not granted (#124); in-place volume tag
+  changes are ignored and take effect on the next instance replacement.
 
 ## [0.4.0] - 2026-10-29
 
