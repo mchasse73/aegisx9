@@ -1,6 +1,6 @@
 # 18. Directory adapters for identity sync
 
-- Status: Proposed (owner requirement 2026-10-29; awaiting the owner's confirmation)
+- Status: Accepted (owner decisions 2026-10-29)
 - Date: 2026-10-29
 - Extends: ADR 0015
 

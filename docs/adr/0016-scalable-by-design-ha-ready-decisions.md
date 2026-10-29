@@ -1,6 +1,6 @@
 # 16. Scalable by design: every decision is HA-ready, HA is built later
 
-- Status: Proposed (owner requirement 2026-10-29; awaiting the owner's confirmation)
+- Status: Accepted (owner decisions 2026-10-29)
 - Date: 2026-10-29
 
 ## Context
