@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Staging runs v0.4.0 with the auth sidecar enabled (#86): callers present identity-provider
+  access tokens of at most 15 minutes, which the sidecar exchanges for virtual keys that
+  expire with them. The issuer, JWKS URL, audience and group-to-team mapping are read from
+  the gateway Secret, so the public overlay holds no identity-provider details.
+
 ## [0.4.0] - 2026-10-29
 
 ### Added

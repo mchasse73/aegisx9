@@ -16,6 +16,6 @@ helmCharts:
     valuesFile: values.yaml
 images:
   - name: ghcr.io/mchasse73/aegisx9
-    # Signed digest (legacy cosign layout) from the release workflow for main 95989c8 (2026-10-22):
-    # Prisma baked in for the budget database; key-id based signing-key check.
-    digest: sha256:25d3f297f9e52e7194a1c8c3c06020d296e3c23515fe7c303d04e6bdae7baf9c
+    # v0.4.0: the signed digest from the release workflow for main 66f664b (2026-10-29), the
+    # same index the 0.4.0 tag points at. Brings the auth sidecar (ADR 0010) enabled below.
+    digest: sha256:375c1d87235d6d95669154ced15f1f7bda54042d5c24d8957b3cc5b146aed30d
