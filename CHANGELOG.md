@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-29
+
 ### Added
 - ADR 0019, assume breach: every control answers prevent, detect, contain and recover. It adds
   a WORM audit copy with an externally anchored chain head, misuse detection and honeytokens,
