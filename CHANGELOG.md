@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+- CI: ten new filelock 3.x advisories (#117) are assessed and listed in `.trivyignore` with
+  their rationale. All need a second local user, or are Windows-only, and the gateway pod is
+  a single non-root user on a read-only root filesystem. LiteLLM still caps `filelock<4`, so
+  the fixed 4.x releases don't resolve. pip-audit --strict was failing every PR.
+
 ## [0.3.1] - 2026-10-28
 
 ### Fixed

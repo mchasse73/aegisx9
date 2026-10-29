@@ -4,6 +4,23 @@
 # fixed here and why it does not apply, and when it is re-evaluated. Drop an entry as soon
 # as an upstream release carries the fix.
 
+# 2026-10-29 (#117): ten more filelock 3.x advisories, fixed in 4.0.9/4.2.1; still blocked by
+# LiteLLM's filelock<4.0 cap. All are local (AV:L, PR:L): they need a second local user who can
+# write near the lock path or swap a symlink/inode under it (UnixFileLock, StrictSoftFileLock,
+# SoftFileLock, SoftReadWriteLock, ReadWriteLock), or are Windows-only (WindowsFileLock). The
+# gateway pod is one non-root user on a read-only root filesystem. Re-evaluate on every
+# Dependabot bump of litellm; remove with the #88 entries once it allows filelock 4.2.1.
+CVE-2026-112908
+CVE-2026-112909
+CVE-2026-112910
+CVE-2026-112911
+CVE-2026-112912
+CVE-2026-112915
+CVE-2026-112935
+CVE-2026-112936
+CVE-2026-112938
+CVE-2026-112939
+
 # 2026-10-27 (#88): filelock 3.x, fixed in 4.2.1. LiteLLM up to 1.106.4 requires
 # filelock<4.0, so no pin resolves. GHSA-v4x8-3wr5-3wq8 is in ReadWriteLock, which LiteLLM
 # never uses, and needs a second local user; the gateway pod is one non-root user on a
