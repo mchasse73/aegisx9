@@ -27,8 +27,10 @@ leaked tokens".
    identity on every use. On its own, a copied handle is useless.
 2. **Single-use broker token per request.** For each request, the host agent exchanges the
    handle for a single-use broker token. A replayed token is refused.
-3. **The broker holds the only real login,** using workload identity, so no secret is stored
-   anywhere. For each request it obtains a single-use, least-privilege child credential
+3. **The broker holds the only real login.** It authenticates with workload identity, so
+   the broker itself needs no stored secret. For a vendor without short-lived credentials, the
+   ADR 0013 fallback still applies: a narrowly scoped secret kept only in Vault and used only
+   by the broker, never by an agent. For each request it obtains a single-use, least-privilege child credential
    (the ADR 0013 mechanisms) and uses it itself. That credential never leaves the broker.
 4. **Detectable by design.** Handles carry a fixed prefix that secret scanners and log
    scanners recognise. A sighting anywhere (code, logs, tickets, chat, model traffic) revokes
