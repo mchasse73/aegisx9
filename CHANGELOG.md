@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- ADR 0019, assume breach: every control answers prevent, detect, contain and recover. It adds
+  a WORM audit copy with an externally anchored chain head, misuse detection and honeytokens,
+  a signed one-action kill switch, just-in-time privilege for automation, and recovery
+  drills, plus an acceptance checklist.
+- ADR 0020, geofencing for remote access: an edge country allow-list, per-user regions in the
+  identity provider, revoke and alert on a disallowed region, impossible-travel detection, and
+  a local GeoIP database updated by pull. Geography only removes access.
 - ADR 0016, scalable by design: HA is designed for now and built after Phase 2. Every ADR
   carries a scalability check (0001-0015 checked), with rules for shared state (one
   sequencer with signed checkpoints, compare-and-set nonces and signature counters,

@@ -25,7 +25,7 @@ product would be: issue-driven, trunk-based, signed supply chain, GitOps deliver
 continuous red-team gate.
 
 > **Status:** Phase 1 (LLM gateway, guards, CI/CD) in progress. Version `0.4.0`. The build
-> and action gate is designed (ADRs 0011-0018) and starts with GitHub.
+> and action gate is designed (ADRs 0011-0020) and starts with GitHub.
 >
 > **Docs:** maintained in a private documentation system; public copies will follow.
 
