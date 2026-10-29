@@ -31,7 +31,7 @@ import os
 import secrets
 import sys
 import tempfile
-import time
+import threading
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -46,7 +46,8 @@ DEFAULT_TIMEOUT_S = 300
 DEFAULT_SCOPE = "openid profile"
 HTTP_TIMEOUT_S = 15
 MAX_RESPONSE_BYTES = 1 << 20
-# A connection that sends nothing must not hold the single-threaded callback server.
+# Idle limit per callback connection; each runs in its own thread, so a slow or silent
+# client never holds up the real redirect, and the overall wait is an absolute deadline.
 CALLBACK_READ_TIMEOUT_S = 10
 
 Fetch = Callable[[urllib.request.Request], Mapping[str, Any]]
@@ -134,15 +135,28 @@ def authorization_url(
     return endpoints.authorize + sep + query
 
 
-class CallbackServer(http.server.HTTPServer):
+class CallbackServer(http.server.ThreadingHTTPServer):
     """Loopback listener for the redirect; bound before the browser is opened."""
+
+    daemon_threads = True
 
     def __init__(self, port: int, state: str) -> None:
         if not 1 <= port <= 65535:
             raise LoginError("port must be 1-65535")
         self.state = state
         self.result: dict[str, str] = {}
+        self.done = threading.Event()
+        self._lock = threading.Lock()
         super().__init__(("127.0.0.1", port), _CallbackHandler)
+
+    def finish_with(self, key: str, value: str) -> bool:
+        """Records the first outcome; later ones (and any after the deadline) are dropped."""
+        with self._lock:
+            if self.done.is_set():
+                return False
+            self.result[key] = value
+            self.done.set()
+            return True
 
 
 class _CallbackHandler(http.server.BaseHTTPRequestHandler):
@@ -168,13 +182,15 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
             # and keep waiting, so a stray request cannot abort the login.
             self._reply(404, b"Not found.")
             return
+        code = params.get("code", [""])[0]
         if "error" in params:
-            self.server.result["error"] = "identity provider returned an error"
-        elif not params.get("code", [""])[0]:
-            self.server.result["error"] = "no authorization code"
+            self.server.finish_with("error", "identity provider returned an error")
+            ok = False
+        elif not code:
+            self.server.finish_with("error", "no authorization code")
+            ok = False
         else:
-            self.server.result["code"] = params["code"][0]
-        ok = "code" in self.server.result
+            ok = self.server.finish_with("code", code)
         self._reply(
             200 if ok else 400,
             b"Login complete. You can close this tab." if ok else b"Login failed.",
@@ -183,16 +199,18 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
 
 def wait_for_code(server: CallbackServer, timeout_s: float) -> str:
     """Serves loopback requests until the redirect with our state arrives; returns the code."""
-    deadline = time.monotonic() + timeout_s
+    loop = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1})
+    loop.daemon = True
+    loop.start()
     try:
-        while not server.result:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise LoginError("timed out waiting for the browser")
-            server.timeout = remaining
-            server.handle_request()
+        arrived = server.done.wait(timeout_s)
+        # Close the door: a callback that completes after this point is dropped.
+        timed_out = server.finish_with("error", "timed out waiting for the browser")
     finally:
+        server.shutdown()
         server.server_close()
+    if timed_out or not arrived:
+        raise LoginError("timed out waiting for the browser")
     if "code" not in server.result:
         raise LoginError(server.result["error"])
     return server.result["code"]

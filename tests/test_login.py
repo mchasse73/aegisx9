@@ -8,6 +8,7 @@ import secrets
 import socket
 import stat
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -183,6 +184,56 @@ def test_stray_and_silent_requests_do_not_abort(monkeypatch: pytest.MonkeyPatch)
         t.join()
     assert stray["status"] == 404
     assert real["status"] == 200
+
+
+def test_trickling_client_does_not_block_redirect() -> None:
+    port, state = _free_port(), secrets.token_urlsafe(8)
+    server = login.CallbackServer(port, state)
+    stop = threading.Event()
+
+    def trickle() -> None:
+        with socket.create_connection(("127.0.0.1", port)) as s:
+            for ch in b"GET /?state=x HTTP/1.1\r\n":
+                if stop.is_set():
+                    return
+                s.sendall(bytes([ch]))
+                stop.wait(0.2)
+
+    slow = threading.Thread(target=trickle)
+    slow.start()
+    real: dict[str, int] = {}
+    t = threading.Thread(target=_callback, args=(port, f"state={state}&code=good", real))
+    t.start()
+    try:
+        assert login.wait_for_code(server, 5) == "good"
+    finally:
+        stop.set()
+        slow.join()
+        t.join()
+    assert real["status"] == 200
+
+
+def test_deadline_is_absolute_under_trickle() -> None:
+    port = _free_port()
+    server = login.CallbackServer(port, "s")
+    stop = threading.Event()
+
+    def trickle() -> None:
+        with socket.create_connection(("127.0.0.1", port)) as s:
+            while not stop.is_set():
+                s.sendall(b"x")
+                stop.wait(0.05)
+
+    slow = threading.Thread(target=trickle)
+    slow.start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(login.LoginError):
+            login.wait_for_code(server, 0.5)
+    finally:
+        stop.set()
+        slow.join()
+    assert time.monotonic() - started < 3
 
 
 def test_wait_for_code_times_out() -> None:
