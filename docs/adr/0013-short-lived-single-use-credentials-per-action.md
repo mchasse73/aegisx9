@@ -1,6 +1,6 @@
 # 13. Short-lived, single-use secrets and per-action credentials
 
-- Status: Proposed
+- Status: Accepted (owner decisions 2026-10-29)
 - Date: 2026-10-29
 
 ## Context
@@ -19,11 +19,11 @@ never handed to an agent.
 
 | System | Mechanism |
 |---|---|
-| Vault | Dynamic secrets; response-wrapped, single-use tokens to deliver anything; AppRole `secret_id` with `num_uses=1` |
-| GitHub | GitHub App installation tokens (1 hour, scoped to repositories and permissions), never personal access tokens |
-| Atlassian | OAuth 2.0 (3LO) or service accounts with scoped tokens |
+| Vault | Dynamic secrets; response-wrapped, single-use tokens to deliver anything; AppRole `secret_id` with `num_uses=1`, bound to the executor's address range |
+| GitHub | GitHub App installation tokens (1 hour, narrowed to the repositories and permissions of the request, revoked after use), never personal access tokens |
+| Atlassian | Service-account OAuth 2.0 client credentials with scoped tokens (3LO where a user context is required) |
 | AWS | STS (`AssumeRole` / web identity) with session policies and a permissions boundary |
-| CI | OIDC federation (for example GitHub Actions to the cloud and to Vault), no stored cloud keys |
+| CI | OIDC federation (for example GitHub Actions to the cloud and to Vault), with claims bound to the environment and the reusable workflow, no stored cloud keys |
 | Model providers | Workload identity federation (ADR 0009) |
 
 Guardrails:
@@ -35,6 +35,10 @@ Guardrails:
 - **Handling:** secrets travel by stdin, environment or 0600 files, never argv. They are
   never logged, and are inspected by name and length only.
 - **Monitoring:** token creation outside the broker is a bypass signal.
+
+For a vendor that offers no short-lived credential, a per-vendor fallback is recorded: the
+narrowest scope available, the shortest rotation the vendor allows, storage only in Vault, use
+only through the broker, and extra bypass monitoring.
 
 ## Consequences
 

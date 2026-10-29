@@ -14,7 +14,11 @@ All notable changes to this project are documented here. The format follows
   records, N-of-M and separation of duties, break-glass), 0013 (short-lived, single-use
   secrets and per-action credentials) and 0014 (integrations without inbound exposure,
   GitHub first, then Jira, then a connector framework with a trust bar). The roadmap is
-  rebuilt into Phases 2 to 6 (epics #109 to #115).
+  rebuilt into Phases 2 to 6 (epics #109 to #115). ADRs 0012-0014 fold in the detailed
+  design and the owner's decisions of 2026-10-29. AegisX9 builds its own gate, and the
+  homelab's build-request system is customer zero. Customer zero is a declared
+  single-approver tenant, with a cooling-off delay and the second hardware key for T3/T4.
+  Events are polled only, with no inbound exposure.
 
 ### Changed
 - README: describes the new scope and roadmap; the status shows version 0.3.1 (it said 0.1.0).
