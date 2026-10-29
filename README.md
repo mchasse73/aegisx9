@@ -24,7 +24,7 @@ for attempts to get around the gate. It is built and operated the way a large en
 product would be: issue-driven, trunk-based, signed supply chain, GitOps delivery and a
 continuous red-team gate.
 
-> **Status:** Phase 1 (LLM gateway, guards, CI/CD) in progress. Version `0.3.1`. The build
+> **Status:** Phase 1 (LLM gateway, guards, CI/CD) in progress. Version `0.4.0`. The build
 > and action gate is designed (ADRs 0011-0014) and starts with GitHub.
 >
 > **Docs:** maintained in a private documentation system; public copies will follow.
@@ -100,7 +100,7 @@ flowchart LR
 |-------|-------|
 | 1 | LLM gateway behind short-lived OIDC tokens; input/output guards; model allowlist, budgets, rate limits; OpenTelemetry audit log; full CI/CD and red-team gate; external scanner |
 | 1.5 | Developer workspaces: signed workspace image, Vault-issued short-lived developer tokens, centralised workspaces |
-| 2 | **Build gate for GitHub (core):** approval service (typed policy-as-code, N-of-M, separation of duties, break-glass, hardware-key WebAuthn console); GitHub App with required checks, rulesets and deployment protection; build and change audit trail; short-lived secrets broker; bypass detection |
+| 2 | **Build gate for GitHub (core):** approval service (typed policy-as-code, N-of-M, separation of duties, break-glass, hardware-key WebAuthn console); GitHub App with required checks, rulesets and deployment protection; build and change audit trail; short-lived secrets broker, where agents hold only bound, single-use handles and never a real credential, plus per-project service identities ([ADR 0015](docs/adr/0015-brokered-agent-credentials-and-project-identities.md)); bypass detection |
 | 3 | **Jira and change management:** issue and release links, service-desk approvals as workflow (never authority), Jira ↔ PR ↔ request ↔ approval ↔ deployment trail |
 | 4 | Tool/action gateway for agents (MCP): per-agent tool allowlists, per-action credentials, approval for risky actions |
 | 5 | Connector framework: capability matrix and trust bar; GitLab, Bitbucket, Azure DevOps, Forgejo; ServiceNow, Linear; Slack, Teams, PagerDuty; Okta, Entra; Splunk, Sentinel, Datadog, Elastic |

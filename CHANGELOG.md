@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- ADR 0015, brokered agent credentials and per-project identities (#128, amends ADR 0013).
+  Agents hold only an opaque handle bound to their session, process and user, which is
+  exchanged for a single-use broker token per request. The broker keeps the only real login
+  (workload identity) and a single-use child credential that never leaves it. Handles use a
+  scanner-detectable prefix (revoke and alert on sight), and every use is audited. Each project
+  gets a service identity and group in the identity provider, synced to hosts. Onboarding
+  beyond a template needs a signed approval, and there is one register, grant, log in, use,
+  request-more workflow.
 - `aegisx9-login`, a developer CLI that gets a short-lived gateway token (#122): OIDC
   authorization code with PKCE (S256) against a public client and a loopback redirect, an
   https-only discovery whose issuer must match exactly, single-use `state`, and the access
