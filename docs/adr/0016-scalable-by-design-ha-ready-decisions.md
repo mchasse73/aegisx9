@@ -30,7 +30,10 @@ process, one node or one store, and becomes a rewrite later.
      shared store;
    - hardware-key signature counters (signCount) live in the shared approvals store and
      advance by compare-and-set;
-   - worker claims and locks are server-side leases with heartbeats, never worker-local;
+   - worker claims and locks are server-side leases with heartbeats, never worker-local. A
+     holder can pause past its lease, so every write under a lease carries a fencing token the
+     store checks, and the work it guards is idempotent (a duplicate poll or claim has no
+     second effect);
    - the identity provider and secret store are configured as endpoint lists, not one URL;
    - audit events are buffered on local disk when the sink is unavailable, so a sink outage
      never drops evidence;
@@ -52,12 +55,12 @@ process, one node or one store, and becomes a rewrite later.
 | 0006 Vault | secrets, transit keys, PKI | Vault HA cluster; clients take an endpoint list (rule 3) |
 | 0007 AAP / EDA | job history in AAP | AAP clustering; responders are idempotent |
 | 0008 Fulcio chain pin | policy in Git | none |
-| 0009 WIF broker | per-pod access-token cache | each replica federates on its own; no shared state |
+| 0009 WIF broker, spend caps | per-pod access-token cache; proxy, team and member spend in the gateway DB | each replica federates on its own; the budget DB is shared state that replicas must agree on to enforce a global cap, so it needs HA later |
 | 0010 auth sidecar | per-pod key cache; keys and teams in the gateway DB | each replica mints its own keys; the DB is the shared store and needs HA later |
 | 0011 scope | n/a | n/a |
 | 0012 approvals | statements, nonces, signCounts, approval log | shared store, compare-and-set, one sequencer with checkpoints (rule 3) |
 | 0013 per-action credentials | leases in Vault | Vault HA; revocation is idempotent |
-| 0014 connectors | poll cursors and ETags | leases (rule 3) so exactly one replica polls each cursor |
+| 0014 connectors | poll cursors and ETags | leases (rule 3); a paused poller can outlive its lease, so cursor updates are fenced and event handling is idempotent |
 | 0015 brokered credentials | handles, broker nonces, directory sync bundles | shared nonce store, stateless brokers, signed bundles that hosts can fetch from any replica |
 
 ## Scalability

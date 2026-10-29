@@ -34,18 +34,20 @@ must be identified cryptographically, not by address.
    not even on a trusted LAN.
 6. Peers are identified by key (a WireGuard public key, or a client certificate), never by IP
    address. Unknown keys and failed handshakes fail closed.
-7. The topology is multiple hubs, with every spoke peered to every hub. Clients are
-   configured with an ordered endpoint list and fail over in order.
+7. The topology is designed for multiple hubs, with every spoke peered to every hub, and
+   clients are configured with an ordered endpoint list and fail over in order. A single-hub
+   deployment is allowed until HA is built (ADR 0016), but it uses the same list format.
 
 **Acceptance checklist** (every component, every release): no inbound listener reachable from
 outside the trust boundary; every control-plane connection is authenticated by key and
-encrypted; a peer with an unknown key is refused; losing one hub does not stop the control
-plane.
+encrypted; a peer with an unknown key is refused. Once HA is built (ADR 0016): losing one hub
+does not stop the control plane.
 
 ## Scalability
 
 Hubs are stateless relays and scale by adding hubs; spokes hold an ordered list. Poll cursors
-use server-side leases (ADR 0016), so adding replicas never double-polls. A relay is an
+use server-side leases with fenced cursor updates and idempotent event handling (ADR 0016), so
+a duplicate poll by a replica that outlived its lease has no effect. A relay is an
 external queue with its own HA.
 
 ## Consequences
