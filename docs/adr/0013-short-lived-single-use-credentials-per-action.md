@@ -1,6 +1,7 @@
 # 13. Short-lived, single-use secrets and per-action credentials
 
-- Status: Accepted (owner decisions 2026-10-29)
+- Status: Accepted (owner decisions 2026-10-29); amended by ADR 0015 (agents hold bound
+  handles, never the credential)
 - Date: 2026-10-29
 
 ## Context
