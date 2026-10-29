@@ -30,19 +30,25 @@ leaked tokens".
 3. **The broker holds the only real login.** It authenticates with workload identity, so
    the broker itself needs no stored secret. For a vendor without short-lived credentials, the
    ADR 0013 fallback still applies: a narrowly scoped secret kept only in Vault and used only
-   by the broker, never by an agent. For each request it obtains a single-use, least-privilege child credential
-   (the ADR 0013 mechanisms) and uses it itself. That credential never leaves the broker.
-4. **Detectable by design.** Handles carry a fixed prefix that secret scanners and log
-   scanners recognise. A sighting anywhere (code, logs, tickets, chat, model traffic) revokes
-   the handle at once and raises an alert.
+   by the broker, never by an agent. For each request the broker creates a short-lived,
+   non-persisted, least-privilege child credential (the ADR 0013 mechanisms) and uses it
+   itself. That credential never leaves the broker. The broker enforces single use with its
+   own signed nonce, so it doesn't depend on the platform supporting single-use credentials.
+4. **Detectable by design.** Handles and broker tokens carry fixed prefixes that secret
+   scanners and log scanners recognise. A sighting anywhere (code, logs, tickets, chat, model
+   traffic) revokes the token at once and raises an alert.
 5. **Logged from day one.** Every issue, use, denial, replay and wrong-caller attempt is a
    structured, tamper-evident audit event with alert rules. These events feed bypass detection.
+   High-cardinality values (session, handle, path) are event fields, not index labels.
 
 **Per-project identities.**
 
 6. Each project gets an application service identity and a project group, held in the identity
    provider. They are synced to hosts as local non-login users. Hosts use the synced copy, not a
-   live lookup, so they keep working when the identity provider is down.
+   live lookup, so they keep working when the identity provider is down (fail-static). The sync
+   reads only the groups a host is configured for, the source is pluggable, and large fleets use
+   a centrally signed bundle. POSIX ids come from an allocated directory attribute, never from
+   the identity provider's internal key.
 7. AI sessions run as the project's application identity. People join the groups of the
    projects they work on and work in those repositories as themselves. No single account owns
    every repository.
