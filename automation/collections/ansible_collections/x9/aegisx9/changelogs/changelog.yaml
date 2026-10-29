@@ -1,6 +1,13 @@
 ---
 ancestor: null
 releases:
+  0.4.1:
+    changes:
+      trivial:
+        - >-
+          No changes to the collection's roles; version aligned with the AegisX9 release
+          (developer login CLI, scanner volume tags at launch, ADRs 0015-0020).
+    release_date: "2026-10-29"
   0.4.0:
     changes:
       trivial:
