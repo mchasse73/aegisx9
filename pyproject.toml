@@ -28,7 +28,7 @@ dev = [
   # aegisx9.auth; the gateway image gets the same pins from requirements/runtime.txt.
   "pyjwt[crypto]==2.15.1",
   "cryptography==50.0.2",
-  "types-PyYAML==6.0.12.20250915",
+  "types-PyYAML==6.0.12.20260906",
   "types-defusedxml==0.7.0.20250822",
 ]
 
