@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Auth sidecar: an issuer's `audience` and its group-to-team mapping can now come from the
+  gateway Secret (`audienceEnv`, and `groupTeamsEnv` holding ordered `group=team` pairs
+  separated by `;`), like `issuerEnv` and `jwksUrlEnv`. This means no identity-provider
+  details need to be committed to the public repository (refs #86).
 - Product scope and build plan (#107): AegisX9 is the security gateway for AI-driven
   development: an LLM gateway, a build and action gate, and approval governance, with one
   view of what AI is building and changing. ADRs 0011 (scope, accepted), 0012 (approval

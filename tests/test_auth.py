@@ -500,9 +500,54 @@ def test_issuer_and_jwks_from_env() -> None:
     assert cfg.issuer.startswith("https://vault.") and cfg.ca_file == "/etc/ca.pem"
 
 
+def test_audience_and_group_teams_from_env() -> None:
+    cfg = IssuerConfig.from_mapping(
+        {
+            "name": "idp",
+            "issuerEnv": "ISS",
+            "jwksUrlEnv": "JWKS",
+            "audienceEnv": "AUD_ENV",
+            "groupTeamsEnv": "TEAMS",
+        },
+        {
+            "ISS": "https://idp.example.test/",
+            "JWKS": "https://idp.example.test/jwks",
+            "AUD_ENV": AUD,
+            "TEAMS": " admins = developers ; devs=developers;",
+        },
+    )
+    assert cfg.audience == AUD
+    assert cfg.group_teams == (("admins", "developers"), ("devs", "developers"))
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"TEAMS": ""},
+        {"TEAMS": "admins"},
+        {"TEAMS": "=developers"},
+        {"TEAMS": "admins="},
+        {},
+    ],
+)
+def test_invalid_group_teams_env(env: dict[str, str]) -> None:
+    with pytest.raises(AuthConfigError):
+        IssuerConfig.from_mapping(
+            {
+                "name": "idp",
+                "issuer": "https://idp.example.test/",
+                "jwksUrl": "https://idp.example.test/jwks",
+                "audience": AUD,
+                "groupTeamsEnv": "TEAMS",
+            },
+            env,
+        )
+
+
 @pytest.mark.parametrize(
     "override",
     [
+        {"audienceEnv": "UNSET_VAR"},
         {"name": ""},
         {"name": "has space"},
         {"name": "a:b"},
