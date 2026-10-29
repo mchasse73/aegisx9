@@ -49,11 +49,12 @@ gateway:
     # - name: idp                       # short label, logged on rejection
     #   issuerEnv: JWT_ISSUER           # Secret key holding the exact `iss` value (or issuer: <literal>)
     #   jwksUrlEnv: JWT_PUBLIC_KEY_URL  # Secret key holding the https JWKS URL (or jwksUrl: <literal>)
-    #   audience: aegisx9
+    #   audience: aegisx9               # or audienceEnv: <Secret key>
     #   userClaim: sub
     #   groupsClaim: groups
     #   groupTeams:                     # ordered; the first group the caller holds picks the team
     #     - {group: <group>, team: developers}
+    #   # or groupTeamsEnv: <Secret key> holding "group=team;group=team" (same order rule)
     #   maxLifetimeSeconds: 900
     #   caFile: /etc/ssl/certs/ca-certificates.crt   # optional CA bundle for the JWKS host
   # Each model either names the Secret key holding its provider key (apiKeyEnv) or sets

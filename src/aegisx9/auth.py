@@ -85,16 +85,11 @@ class IssuerConfig:
         issuer = _value_or_env(data, "issuer", env, name)
         jwks_url = _value_or_env(data, "jwksUrl", env, name)
         _check_jwks_url(jwks_url, name)
-        audience = str(data.get("audience", "")).strip()
-        if not audience:
-            raise AuthConfigError(f"issuer {name}: audience is required")
+        audience = _value_or_env(data, "audience", env, name)
         lifetime = int(data.get("maxLifetimeSeconds", MAX_LIFETIME_S))
         if not 0 < lifetime <= MAX_LIFETIME_S:
             raise AuthConfigError(f"issuer {name}: maxLifetimeSeconds must be 1..{MAX_LIFETIME_S}")
-        teams = data.get("groupTeams", [])
-        if not isinstance(teams, list):
-            raise AuthConfigError(f"issuer {name}: groupTeams must be a list")
-        group_teams = tuple((str(t["group"]), str(t["team"])) for t in teams)
+        group_teams = _group_teams(data, env, name)
         if not group_teams:
             raise AuthConfigError(f"issuer {name}: groupTeams must map at least one group")
         ca_file = data.get("caFile") or None
@@ -120,6 +115,28 @@ def _value_or_env(data: Mapping[str, Any], key: str, env: Mapping[str, str], nam
     if not value:
         raise AuthConfigError(f"issuer {name}: {key} is required")
     return value
+
+
+def _group_teams(
+    data: Mapping[str, Any], env: Mapping[str, str], name: str
+) -> tuple[tuple[str, str], ...]:
+    """``groupTeams`` (a list), or ``groupTeamsEnv`` naming a Secret-sourced variable that holds
+    ordered ``group=team`` pairs separated by ``;``, so group names need not be committed."""
+    env_name = str(data.get("groupTeamsEnv", "") or "").strip()
+    if env_name:
+        pairs = []
+        for item in env.get(env_name, "").split(";"):
+            if not item.strip():
+                continue
+            group, sep, team = item.partition("=")
+            if not sep or not group.strip() or not team.strip():
+                raise AuthConfigError(f"issuer {name}: groupTeamsEnv entries must be group=team")
+            pairs.append((group.strip(), team.strip()))
+        return tuple(pairs)
+    teams = data.get("groupTeams", [])
+    if not isinstance(teams, list):
+        raise AuthConfigError(f"issuer {name}: groupTeams must be a list")
+    return tuple((str(t["group"]), str(t["team"])) for t in teams)
 
 
 def _check_jwks_url(url: str, name: str) -> None:

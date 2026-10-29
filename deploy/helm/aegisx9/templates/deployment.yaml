@@ -126,12 +126,14 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.existingSecret }}
                   key: LITELLM_MASTER_KEY
-            {{- /* Issuer and JWKS URLs come from the Secret by name, so identity-provider
-                   details never need to be committed. */}}
+            {{- /* Issuer, JWKS URL, audience and group mapping can come from the Secret by
+                   name, so identity-provider details never need to be committed. */}}
             {{- $names := dict }}
             {{- range .Values.gateway.oidc.issuers }}
             {{- if .issuerEnv }}{{ $_ := set $names .issuerEnv true }}{{ end }}
             {{- if .jwksUrlEnv }}{{ $_ := set $names .jwksUrlEnv true }}{{ end }}
+            {{- if .audienceEnv }}{{ $_ := set $names .audienceEnv true }}{{ end }}
+            {{- if .groupTeamsEnv }}{{ $_ := set $names .groupTeamsEnv true }}{{ end }}
             {{- end }}
             {{- range $name, $_ := $names }}
             - name: {{ $name }}
