@@ -2,14 +2,30 @@
 
 <!-- Project id: aegisx9. Public domain (planned): aegisx9.com -->
 
-**A secure AI gateway with governance.** AegisX9 sits between applications and large
-language models. It authenticates callers, applies input and output guards, enforces
-model allowlists, budgets and rate limits, and writes an audit trail that
-never stores secret values. It is built and operated the way a large enterprise product
-would be: issue-driven, trunk-based, signed supply chain, GitOps delivery, and a
+**The security gateway for AI-driven development.** AegisX9 controls what AI does in
+software delivery, and gives DevOps, developers and security one view of it: which builds,
+pull requests and other changes AI is making or has made, who approved them, and with which
+short-lived credentials. It is designed for small, medium and large organisations.
+
+It has two enforcement points and one authority:
+
+- **LLM gateway:** every model call passes through it. It authenticates callers with
+  short-lived tokens, applies input and output guards, enforces model allowlists, budgets and
+  rate limits, and writes an audit trail that never stores secret values.
+- **Build and action gate:** every change an agent or person wants to make (a pull request,
+  a build, a deployment, an infrastructure action) is classified by typed policy and either
+  passes, or waits for a hardware-key-signed approval that is bound to that exact change.
+- **Approval governance:** who may approve, how many approvers are needed, emergency
+  (break-glass) rules, notifications and log routing are all configurable, and changing that
+  policy is itself a signed, multi-approver change.
+
+Secrets are always short-lived and, where possible, single-use. AegisX9 watches continuously
+for attempts to get around the gate. It is built and operated the way a large enterprise
+product would be: issue-driven, trunk-based, signed supply chain, GitOps delivery and a
 continuous red-team gate.
 
-> **Status:** Phase 1 (gateway, guards, CI/CD) in progress. Version `0.1.0`.
+> **Status:** Phase 1 (LLM gateway, guards, CI/CD) in progress. Version `0.3.1`. The build
+> and action gate is designed (ADRs 0011-0014) and starts with GitHub.
 >
 > **Docs:** maintained in a private documentation system; public copies will follow.
 
@@ -82,9 +98,13 @@ flowchart LR
 
 | Phase | Scope |
 |-------|-------|
-| 1 | LiteLLM gateway behind OIDC; input/output guards; model allowlist, budgets, rate limits; OpenTelemetry audit log to Loki; first consumer: the ask-xeronine public chat; full CI/CD and red-team gate |
-| 2 | MCP / tool gateway: per-agent tool allowlists, approval for risky actions, no secrets on argv |
-| 3 | Governance pack: control mapping (OWASP Top 10 for LLM Applications 2025, MITRE ATLAS, NIST AI RMF + AI 600-1), AI system inventory, risk register, ISO/IEC 42001-style policy; Grafana dashboards |
+| 1 | LLM gateway behind short-lived OIDC tokens; input/output guards; model allowlist, budgets, rate limits; OpenTelemetry audit log; full CI/CD and red-team gate; external scanner |
+| 1.5 | Developer workspaces: signed workspace image, Vault-issued short-lived developer tokens, centralised workspaces |
+| 2 | **Build gate for GitHub (core):** approval service (typed policy-as-code, N-of-M, separation of duties, break-glass, hardware-key WebAuthn console); GitHub App with required checks, rulesets and deployment protection; build and change audit trail; short-lived secrets broker; bypass detection |
+| 3 | **Jira and change management:** issue and release links, service-desk approvals as workflow (never authority), Jira ↔ PR ↔ request ↔ approval ↔ deployment trail |
+| 4 | Tool/action gateway for agents (MCP): per-agent tool allowlists, per-action credentials, approval for risky actions |
+| 5 | Connector framework: capability matrix and trust bar; GitLab, Bitbucket, Azure DevOps, Forgejo; ServiceNow, Linear; Slack, Teams, PagerDuty; Okta, Entra; Splunk, Sentinel, Datadog, Elastic |
+| 6 | Governance pack and dashboards: control mapping (OWASP LLM Top 10 2025, MITRE ATLAS, NIST AI RMF + AI 600-1), AI system inventory, risk register, ISO/IEC 42001-style policy; admin console grows each phase |
 
 Work is tracked in GitHub Issues, Milestones and a Projects board.
 

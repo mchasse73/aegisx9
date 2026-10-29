@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Product scope and build plan (#107): AegisX9 is the security gateway for AI-driven
+  development: an LLM gateway, a build and action gate, and approval governance, with one
+  view of what AI is building and changing. ADRs 0011 (scope, accepted), 0012 (approval
+  governance: typed policy-as-code, signed statements with nonce, expiry and per-signer
+  records, N-of-M and separation of duties, break-glass), 0013 (short-lived, single-use
+  secrets and per-action credentials) and 0014 (integrations without inbound exposure,
+  GitHub first, then Jira, then a connector framework with a trust bar). The roadmap is
+  rebuilt into Phases 2 to 6 (epics #109 to #115). ADRs 0012-0014 fold in the detailed
+  design and the owner's decisions of 2026-10-29. AegisX9 builds its own gate, and the
+  homelab's build-request system is customer zero. Customer zero is a declared
+  single-approver tenant, with a cooling-off delay and the second hardware key for T3/T4.
+  Events are polled only, with no inbound exposure.
+
+### Changed
+- README: describes the new scope and roadmap; the status shows version 0.3.1 (it said 0.1.0).
+
 ### Security
 - CI: ten new filelock 3.x advisories (#117) are assessed and listed in `.trivyignore` with
   their rationale. All need a second local user, or are Windows-only, and the gateway pod is
