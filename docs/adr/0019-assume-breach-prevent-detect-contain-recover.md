@@ -49,7 +49,10 @@ its next check. Anchoring is one scheduled job under a lease.
 ## Assume breach
 
 This ADR is the assume-breach rule. If the audit pipeline itself is compromised, the external
-anchor and WORM copy still show the gap or the rewrite.
+anchor and the WORM copy show any rewrite of history that was already committed. They can't
+show an event the pipeline dropped before committing it. For that, each event source numbers
+its events, and a checker outside the pipeline (reading the sources' counters and the WORM
+copy) alerts on a missing sequence number or an overdue receipt.
 
 ## Consequences
 

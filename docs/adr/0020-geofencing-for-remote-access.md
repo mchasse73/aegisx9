@@ -14,8 +14,11 @@ ever narrow access.
 
 1. **Geography only removes access, never grants it.** A valid key and identity are still
    required. Geofencing is an extra deny layer.
-2. **Edge allow-list.** The remote-access edge accepts handshakes only from an allow-list of
-   countries.
+2. **Edge allow-list.** The remote-access edge accepts traffic only from an allow-list of
+   countries, filtering transport packets as well as handshakes. WireGuard lets an
+   established peer roam to a new source address without a new handshake. When an
+   authenticated peer's endpoint changes, its per-user regions are checked again, with the
+   same revoke-and-alert policy (rule 4).
 3. **Per-user regions.** Each user's allowed regions are held in the identity provider, as an
    attribute or a group, and are synced like other identity data (ADR 0015, ADR 0018).
 4. **Disallowed region means revoke and alert.** A handshake or login from a region the user
