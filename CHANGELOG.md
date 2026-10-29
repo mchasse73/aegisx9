@@ -7,6 +7,16 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- ADR 0016, scalable by design: HA is designed for now and built after Phase 2. Every ADR
+  carries a scalability check (0001-0015 checked), with rules for shared state (one
+  sequencer with signed checkpoints, compare-and-set nonces and signature counters,
+  server-side leases, endpoint lists, a disk-buffered audit, low-cardinality labels).
+- ADR 0017, outbound only, never ingress (amends ADR 0014: no webhooks, SCIM push or inbound
+  callbacks; hosts dial the control plane). The control plane runs only over WireGuard or
+  mTLS, with peers identified by key, multiple hubs and fail-closed behaviour, plus an
+  acceptance checklist.
+- ADR 0018, directory adapters for identity sync (Authentik, Okta, Entra ID, SCIM pull),
+  with machine identities kept out of per-seat directory licences.
 - ADR 0015, brokered agent credentials and per-project identities (#128, amends ADR 0013).
   Agents hold only an opaque handle bound to their session, process and user, which is
   exchanged for a single-use broker token per request. The broker keeps the only real login

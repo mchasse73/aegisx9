@@ -1,6 +1,7 @@
 # 14. Integrations without inbound exposure, and a connector trust bar
 
-- Status: Accepted (owner decisions 2026-10-29)
+- Status: Accepted (owner decisions 2026-10-29); amended by ADR 0017 (outbound only: the
+  inbound webhook-relay option is withdrawn)
 - Date: 2026-10-29
 
 ## Context
