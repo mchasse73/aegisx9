@@ -190,13 +190,19 @@ resource "aws_instance" "scanner" {
     encrypted   = true
     volume_type = "gp3"
     volume_size = var.volume_size
-    tags        = local.tags
   }
 
   tags = local.tags
+  # Volume tags go in the RunInstances request itself. Tags set through root_block_device
+  # are applied by a separate CreateTags after launch, which the deploy role is not granted:
+  # it may tag only at creation, and only with Project=aegisx9 in the request.
+  volume_tags = merge(local.tags, { ManagedBy = "terraform", Component = "external-vantage" })
 
   lifecycle {
-    ignore_changes = [ami] # the "current" Ubuntu AMI moves; rebuilds are deliberate
+    # ami: the "current" Ubuntu AMI moves; rebuilds are deliberate.
+    # volume_tags: they can only be written at launch (see above), so an in-place change
+    # would be denied; a tag change takes effect on the next instance replacement.
+    ignore_changes = [ami, volume_tags]
   }
 }
 

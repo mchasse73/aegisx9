@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Scanner root volume tags are now part of the launch request (`volume_tags`) instead of a
+  CreateTags after launch, which the deploy role is not granted (#124); in-place volume tag
+  changes are ignored and take effect on the next instance replacement.
+
 ### Changed
 - Staging runs v0.4.0 with the auth sidecar enabled (#86): callers present identity-provider
   access tokens of at most 15 minutes, which the sidecar exchanges for virtual keys that
