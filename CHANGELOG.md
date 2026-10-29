@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Staging: the developers team's 30-day cap rises from $50 to $75 (owner decision
+  2026-10-29), so all three developers in the Coder quota can use their full $25 each.
+  Allocated budgets now total $125 of the $180 gateway cap.
+
 ## [0.4.1] - 2026-10-29
 
 ### Added
