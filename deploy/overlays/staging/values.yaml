@@ -21,7 +21,7 @@ gateway:
     # The owner's Anthropic credits are $200/month; the gateway stops at $180 per 30 days.
     proxyMaxBudgetUsd: 180
     budgetDuration: 30d
-    # $20 + $30 + $50 allocated; the remaining $80 is deliberately unallocated headroom.
+    # $20 + $30 + $75 allocated; the remaining $55 is deliberately unallocated headroom.
     # Applied by the budget bootstrap Job after each sync.
     consumers:
       - teamId: public-chat
@@ -34,12 +34,12 @@ gateway:
         maxBudgetUsd: 30
         models: [claude-haiku-5-5, claude-sonnet-5-5]
         defaultModel: claude-haiku-5-5
-      # $25 per developer; the team cap covers two developers. Raise it (within the
-      # unallocated headroom) when a developer joins. Opus is served only when a developer
+      # $25 per developer; the team cap covers three developers (the Coder quota). Raise it
+      # (within the unallocated headroom) when a developer joins. Opus is served only when a developer
       # asks for it by name; "default" resolves to Sonnet.
       - teamId: developers
         alias: Developers
-        maxBudgetUsd: 50
+        maxBudgetUsd: 75
         memberBudgetUsd: 25
         models: [claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5]
         defaultModel: claude-sonnet-5-5
