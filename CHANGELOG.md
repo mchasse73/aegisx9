@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `aegisx9-login`, a developer CLI that gets a short-lived gateway token (#122): OIDC
+  authorization code with PKCE (S256) against a public client and a loopback redirect, an
+  https-only discovery whose issuer must match exactly, single-use `state`, and the access
+  token written to a 0600 file by atomic replace. It never prints the token, only its
+  remaining lifetime, and reports errors by exception type only.
+
 ### Fixed
 - Scanner root volume tags are now part of the launch request (`volume_tags`) instead of a
   CreateTags after launch, which the deploy role is not granted (#124); in-place volume tag
