@@ -5,7 +5,7 @@ litellm[proxy]==1.106.2
 # ships in its own images). The image bakes the CLI, engines and generated client at build.
 prisma==0.11.0
 opentelemetry-sdk==1.45.1
-opentelemetry-exporter-otlp-proto-http==1.45.1
+opentelemetry-exporter-otlp-proto-http==1.45.2
 # JWT verification in aegisx9.auth (custom_auth hook, ADR 0010). LiteLLM[proxy] allows these.
 pyjwt[crypto]==2.15.1
 cryptography==50.0.2
