@@ -206,6 +206,14 @@ jobs:
             kubectl kustomize --enable-helm "deploy/overlays/${env}" > "rendered/${env}.yaml"
           done
           cp policies/kyverno/*.yaml rendered/
+      # A rollout runs the surge pod next to the old one; if that peak exceeds the namespace
+      # quota, the change merges and then never starts (#162). Staging's quota (set by the
+      # platform team, not yet by infra/staging) is limits.cpu 3, limits.memory 3Gi, pods 5.
+      - name: rollout fits the staging quota
+        run: |
+          python3 -m pip install --quiet "pyyaml==6.0.3"
+          python3 scripts/ci/check_quota_fit.py rendered/staging.yaml \
+            --limits-cpu 3 --limits-memory 3Gi --pods 5
       - uses: bridgecrewio/checkov-action@6f26dc90000b74feb589a906cdfae540f5119895 # v12.3134.0
         with:
           directory: rendered

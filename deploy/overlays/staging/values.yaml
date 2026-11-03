@@ -71,6 +71,22 @@ gateway:
         userClaim: sub
         groupsClaim: groups
         maxLifetimeSeconds: 900
+    # Limits sized so a rolling update fits the namespace quota (limits.cpu 3): two pods at
+    # 1.3 CPU each (gateway 800m, auth 400m, broker 100m) plus the budget Job and one CronJob.
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        cpu: 400m
+        memory: 128Mi
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    cpu: 800m
+    memory: 1Gi
 opsJobs:
   priorityClassName: aegisx9-low
 wif:
