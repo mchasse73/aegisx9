@@ -39,6 +39,7 @@ All notable changes to this project are documented here. The format follows
   Allocated budgets now total $125 of the $180 gateway cap.
 
 ### Fixed
+- garak's report directory is now created before the run; garak opens the file but never creates its directory (#147).
 - garak never ran: the probe `xss.MarkdownImageExfil` moved to `web_injection` in garak 0.17, so garak rejected the spec and wrote no report. The probe and its threshold now use `web_injection` (same 0.95 floor). The garak gate now fails when a configured probe family is missing from the report, or when a family made no attempts (previously scored as 100%). A test ties the probe spec to the thresholds file (#147).
 - promptfoo runs with `--no-table`, so generated planted values (fake, built at runtime) no longer appear in the public job log (#147).
 - After minting, the red-team job reports the access token's claim names and group count, never a value, to triage the gateway's `no_team` refusal (#147).
