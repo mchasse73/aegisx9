@@ -1,0 +1,263 @@
+{
+  "endpoint": {
+    "method": "POST",
+    "path": "/jobs/webauthn/register-options"
+  },
+  "roles": [
+    "approver"
+  ],
+  "description": "PublicKeyCredentialCreationOptions in their JSON form, at the TOP LEVEL of the body (no 'publicKey' wrapper). The challenge is single use and valid 5 minutes. Needs a fresh login, like register.",
+  "request": {
+    "body_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "example": {}
+  },
+  "responses": [
+    {
+      "name": "options",
+      "status": 200,
+      "when": "approver bearer with a fresh login, WebAuthn configured",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "rp",
+          "user",
+          "challenge",
+          "pubKeyCredParams",
+          "timeout",
+          "excludeCredentials",
+          "authenticatorSelection",
+          "attestation"
+        ],
+        "properties": {
+          "rp": {
+            "type": "object",
+            "required": [
+              "id",
+              "name"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "user": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "displayName"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "displayName": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "challenge": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "pubKeyCredParams": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "type",
+                "alg"
+              ],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "public-key"
+                },
+                "alg": {
+                  "type": "integer"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "excludeCredentials": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "type",
+                "id"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "public-key"
+                },
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]+$"
+                }
+              }
+            }
+          },
+          "authenticatorSelection": {
+            "type": "object",
+            "required": [
+              "residentKey",
+              "requireResidentKey",
+              "userVerification"
+            ],
+            "properties": {
+              "residentKey": {
+                "type": "string",
+                "enum": [
+                  "discouraged",
+                  "preferred",
+                  "required"
+                ]
+              },
+              "requireResidentKey": {
+                "type": "boolean"
+              },
+              "userVerification": {
+                "type": "string",
+                "const": "required"
+              }
+            },
+            "additionalProperties": false
+          },
+          "attestation": {
+            "type": "string",
+            "enum": [
+              "none",
+              "indirect",
+              "direct",
+              "enterprise"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "rp": {
+          "id": "console.example.com",
+          "name": "Approvals"
+        },
+        "user": {
+          "id": "86nmaVdUhBFGtA6fXgg9WA",
+          "name": "approver@example.com",
+          "displayName": "approver@example.com"
+        },
+        "challenge": "NPrR84ABR9BVIGAwbrXBYca1vzLkCWV_qZtjbouMP70",
+        "pubKeyCredParams": [
+          {
+            "type": "public-key",
+            "alg": -7
+          },
+          {
+            "type": "public-key",
+            "alg": -8
+          }
+        ],
+        "timeout": 300000,
+        "excludeCredentials": [],
+        "authenticatorSelection": {
+          "residentKey": "discouraged",
+          "requireResidentKey": false,
+          "userVerification": "required"
+        },
+        "attestation": "direct"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "fresh_login_required",
+      "status": 403,
+      "when": "the bearer's auth_time AND iat are both older than the fresh-login window (default 300 s)",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "const": "sign in again to register a key"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "sign in again to register a key"
+      },
+      "console_action": "fresh_login"
+    },
+    {
+      "name": "not_console",
+      "status": 403,
+      "when": "any gate token (operator included): console only",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "const": "the approval console (approver) only"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "the approval console (approver) only"
+      }
+    },
+    {
+      "name": "not_configured",
+      "status": 503,
+      "when": "the gate has no RP ID or origin configured (WebAuthn off)",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^WebAuthn is not configured"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "WebAuthn is not configured on this server (WEBAUTHN_RP_ID, WEBAUTHN_ORIGIN)"
+      },
+      "console_action": "bad_gateway"
+    }
+  ]
+}

@@ -49,6 +49,8 @@ target-version = "py312"
 src = ["src", "scanner", "tests"]
 # Break-glass tools are Python scripts without a .py suffix; lint and format them too.
 extend-include = ["workspace/breakglass/bin/handoff-sync", "workspace/breakglass/bin/aegisx9-event"]
+# Vendored contract fixture: kept identical to the shared upstream copy so the two can be diffed.
+extend-exclude = ["tests/contracts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "S", "C4", "SIM", "RUF"]

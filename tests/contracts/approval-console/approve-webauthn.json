@@ -1,0 +1,692 @@
+{
+  "endpoint": {
+    "method": "POST",
+    "path": "/jobs/approve-webauthn"
+  },
+  "roles": [
+    "approver",
+    "operator"
+  ],
+  "description": "A WebAuthn assertion over sha256(statement v2), relayed unchanged from the browser. The approving principal is the credential's registry owner; then nonce, separation of duties, one vote per person and threshold.",
+  "request": {
+    "body_schema": {
+      "type": "object",
+      "required": [
+        "nonce",
+        "statement",
+        "credential_id",
+        "authenticator_data",
+        "client_data_json",
+        "signature"
+      ],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "statement": {
+          "type": "string",
+          "pattern": "^x9-build-approval v2\n",
+          "maxLength": 20000
+        },
+        "credential_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "authenticator_data": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "client_data_json": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "user_handle": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "example": {
+      "nonce": "3f9c2a7e5b1d4c8a9e6f0b2d7a4c1e8f",
+      "statement": "x9-build-approval v2\ndate: 2026-11-03\ndecision: approve\nnonce: 3f9c2a7e5b1d4c8a9e6f0b2d7a4c1e8f\nexpires: 2026-11-03T12:15:00Z\nrequester: requester-agent\npolicy: sha256:396feacff4f0cc244215374644c26e6e0bd264929e6d38807135c00d4570f8b1 tier=T4 threshold=1 group=owner\njob: REQ-20261103-001 sha256:131f050bd5e4be49457389df9bee7575ed5c22a5e1c1071df21f0c8e516089cb\n",
+      "credential_id": "01F9NYjkEDlZeKHE8Sn8LXWNm-teRnQ_4Ah-LCC0fqA",
+      "authenticator_data": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicGpaLUdWWnNRcEItYmNTaE05NUliX2JTeTdTd1RQMjBENEVqMGZNaHVSZyIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5leGFtcGxlLmNvbSJ9",
+      "signature": "Gi_CbcfqWipHSLfLKx7xk9lqssmfkwkvaeYwdbKNEngaL8Jtx-paKkdIt8srHvGT2WqyyZ-TCS9p5jB1so0SeA",
+      "user_handle": "86nmaVdUhBFGtA6fXgg9WA"
+    }
+  },
+  "responses": [
+    {
+      "name": "approved",
+      "status": 200,
+      "when": "the threshold is reached; each job is 'approved' or 'skipped: <reason>' / 'not found'",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "approver",
+          "approvals",
+          "threshold",
+          "results"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^webauthn [0-9a-f]{16} aaguid "
+          },
+          "approver": {
+            "type": "string",
+            "minLength": 1
+          },
+          "approvals": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "results": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^REQ-\\d{8}-\\d{3}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "key": "webauthn 4f7af089863a6109 aaguid 2fc0579f-8113-47ea-b116-bb5a8db9202a",
+        "approver": "approver@example.com",
+        "approvals": 1,
+        "threshold": 1,
+        "results": {
+          "REQ-20261103-001": "approved"
+        }
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "recorded_waiting",
+      "status": 200,
+      "when": "a valid signature below the threshold (N-of-M)",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "approver",
+          "approvals",
+          "threshold",
+          "results"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^webauthn [0-9a-f]{16} aaguid "
+          },
+          "approver": {
+            "type": "string",
+            "minLength": 1
+          },
+          "approvals": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "results": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^REQ-\\d{8}-\\d{3}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "key": "webauthn 4f7af089863a6109 aaguid 2fc0579f-8113-47ea-b116-bb5a8db9202a",
+        "approver": "approver@example.com",
+        "approvals": 1,
+        "threshold": 2,
+        "results": {
+          "REQ-20261103-001": "signature 1 of 2 recorded; waiting for more"
+        }
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "already_counted",
+      "status": 200,
+      "when": "the same principal signs the same open nonce again",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "approver",
+          "approvals",
+          "threshold",
+          "results"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^webauthn [0-9a-f]{16} aaguid "
+          },
+          "approver": {
+            "type": "string",
+            "minLength": 1
+          },
+          "approvals": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "results": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^REQ-\\d{8}-\\d{3}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "key": "webauthn 4f7af089863a6109 aaguid 2fc0579f-8113-47ea-b116-bb5a8db9202a",
+        "approver": "approver@example.com",
+        "approvals": 1,
+        "threshold": 2,
+        "results": {
+          "REQ-20261103-001": "already counted for approver@example.com (one vote per person)"
+        }
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "bad_request",
+      "status": 400,
+      "when": "statement missing, over 20000 chars, not a parseable v2 statement, or nonce differs from the statement's",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: nonce does not match the statement's"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_malformed",
+      "status": 403,
+      "when": "credential_id, authenticator_data, client_data_json or signature is not base64url, or clientDataJSON / authenticatorData do not parse",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "malformed"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: credential_id must be base64url",
+        "code": "malformed"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_unknown",
+      "status": 403,
+      "when": "the credential id is not in the registry",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "unknown"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: credential is not registered",
+        "code": "unknown"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_state",
+      "status": 403,
+      "when": "the credential is revoked (or became inactive during the check)",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "state"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: credential is revoked",
+        "code": "state"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_principal",
+      "status": 403,
+      "when": "the bearer's email is not the credential's owner, or user_handle is not the credential's user",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "principal"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: the signed-in user does not own this credential",
+        "code": "principal"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_origin",
+      "status": 403,
+      "when": "clientDataJSON.origin is not the console's exact origin, or crossOrigin is true",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "origin"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: origin 'https://other.example.com' is not the console's",
+        "code": "origin"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_verify",
+      "status": 403,
+      "when": "wrong clientDataJSON.type, challenge is not sha256(statement), wrong RP ID hash, or the signature does not verify",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "verify"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: challenge is not sha256 of the issued statement",
+        "code": "verify"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_uv",
+      "status": 403,
+      "when": "the authenticator data lacks user presence or user verification (PIN/biometric)",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "uv"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: PIN/biometric required: the assertion lacks user presence or user verification",
+        "code": "uv"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_synced",
+      "status": 403,
+      "when": "the assertion's authenticator data has backupEligible or backupState set",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "synced"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: synced passkey (backup eligible) refused",
+        "code": "synced"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_counter",
+      "status": 403,
+      "when": "signCount is not above the last one seen for this key (replay or cloned key: the gate raises an alert)",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "counter"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: signature counter 7 is not above the last seen 7 for this key (replay or cloned key)",
+        "code": "counter"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_expired",
+      "status": 403,
+      "when": "the statement's expires time has passed",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "expired"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: challenge expired at 2026-11-03T12:15:00Z",
+        "code": "expired"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_nonce_unknown",
+      "status": 403,
+      "when": "the statement's nonce was never issued",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "nonce_unknown"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: unknown nonce (request a new challenge)",
+        "code": "nonce_unknown"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_nonce_used",
+      "status": 403,
+      "when": "the nonce was already consumed (single use)",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "nonce_used"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: nonce already consumed (single use)",
+        "code": "nonce_used"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_statement_mismatch",
+      "status": 403,
+      "when": "the statement differs from the one issued for this nonce",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "statement_mismatch"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: statement differs from the one issued for this nonce",
+        "code": "statement_mismatch"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_sod",
+      "status": 403,
+      "when": "the signer is the jobs' requester (separation of duties)",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^signature rejected: "
+          },
+          "code": {
+            "type": "string",
+            "const": "sod"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "signature rejected: the signer is the requester (separation of duties)",
+        "code": "sod"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "forbidden",
+      "status": 403,
+      "when": "a project gate token",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "const": "operator or the approval console only"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "operator or the approval console only"
+      }
+    },
+    {
+      "name": "not_configured",
+      "status": 503,
+      "when": "the gate has no RP ID or origin configured (WebAuthn off)",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^WebAuthn is not configured"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "WebAuthn is not configured on this server (WEBAUTHN_RP_ID, WEBAUTHN_ORIGIN)"
+      },
+      "console_action": "bad_gateway"
+    }
+  ]
+}
