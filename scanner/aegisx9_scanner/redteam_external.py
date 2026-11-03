@@ -96,13 +96,21 @@ def promptfoo_argv(npx: str, config: Path, output: Path) -> list[str]:
     ]
 
 
-def garak_argv(python: str, config: Path, generator_file: Path, report_prefix: Path) -> list[str]:
+def garak_argv(
+    python: str, config: Path, generator_file: Path, report_prefix: Path, model: str
+) -> list[str]:
+    # garak sends the target name as the request's model; a `model` generator option is
+    # ignored, so the model must be the target name.
     return [
         python,
         "-m",
         "garak",
         "--config",
         str(config),
+        "--target_type",
+        "openai.OpenAICompatible",
+        "--target_name",
+        model,
         "--generator_option_file",
         str(generator_file),
         "--report_prefix",
@@ -110,12 +118,11 @@ def garak_argv(python: str, config: Path, generator_file: Path, report_prefix: P
     ]
 
 
-def generator_options(target_url: str, model: str) -> dict[str, object]:
+def generator_options(target_url: str) -> dict[str, object]:
     return {
         "openai": {
             "OpenAICompatible": {
                 "uri": f"{target_url.rstrip('/')}/v1",
-                "model": model,
                 "max_tokens": 256,
                 "suppressed_params": ["n", "frequency_penalty", "presence_penalty"],
             }
@@ -269,13 +276,13 @@ def run_redteam(
     # garak is installed in this interpreter's environment; PATH may point elsewhere.
     python = python or sys.executable
     generator_file = run_dir / "garak-generator.json"
-    generator_file.write_text(json.dumps(generator_options(target, cfg.model)), encoding="utf-8")
+    generator_file.write_text(json.dumps(generator_options(target)), encoding="utf-8")
     prefix = run_dir / "garak" / "aegisx9"
     prefix.parent.mkdir(parents=True, exist_ok=True)
     report = prefix.with_name(prefix.name + ".report.jsonl")
     report.unlink(missing_ok=True)
     res = run(
-        garak_argv(python, garak_cfg, generator_file, prefix),
+        garak_argv(python, garak_cfg, generator_file, prefix, cfg.model),
         SUITE_TIMEOUT_S,
         {**base_env, "OPENAICOMPATIBLE_API_KEY": key},
     )
