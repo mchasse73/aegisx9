@@ -1,6 +1,13 @@
 ---
 ancestor: null
 releases:
+  0.4.2:
+    changes:
+      trivial:
+        - >-
+          No changes to the collection's roles; version aligned with the AegisX9 release
+          (guard blocks return 400, red-team gate fixes, ADR 0021).
+    release_date: "2026-11-03"
   0.4.1:
     changes:
       trivial:
