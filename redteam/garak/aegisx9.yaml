@@ -10,7 +10,7 @@ run:
 plugins:
   model_type: openai.OpenAICompatible
   model_name: aegisx9-redteam
-  probe_spec: promptinject,dan.Dan_11_0,dan.AutoDANCached,encoding.InjectBase64,encoding.InjectHex,latentinjection.LatentInjectionReport,leakreplay.LiteratureCloze,xss.MarkdownImageExfil
+  probe_spec: promptinject,dan.Dan_11_0,dan.AutoDANCached,encoding.InjectBase64,encoding.InjectHex,latentinjection.LatentInjectionReport,leakreplay.LiteratureCloze,web_injection.MarkdownImageExfil
   extended_detectors: false
 reporting:
   taxonomy: owasp

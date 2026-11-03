@@ -98,7 +98,7 @@ jobs:
           unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
           npx --yes "promptfoo@${PROMPTFOO_VERSION}" eval \
             --config redteam/promptfoo/promptfooconfig.yaml \
-            --no-cache --no-share --output redteam/results/promptfoo.json 2>&1 \
+            --no-cache --no-share --no-table --output redteam/results/promptfoo.json 2>&1 \
             | python3 scripts/ci/redact_log.py --mask-env AEGIS_STAGING_URL
       - name: gateway token for garak
         env:

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import re
 import secrets
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -12,6 +13,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,6 +45,51 @@ def test_gate_pass_rates_and_thresholds(tmp_path: Path) -> None:
     assert rates == {"dan": 0.95, "encoding": 0.5}
     thresholds = json.loads((ROOT / "redteam/garak/thresholds.json").read_text())
     assert gate.evaluate(rates, thresholds) == ["encoding"]
+
+
+def _run_gate(
+    tmp_path: Path, rows: list[dict], thresholds: dict, monkeypatch: pytest.MonkeyPatch
+) -> int:  # type: ignore[type-arg]
+    report, th = tmp_path / "r.report.jsonl", tmp_path / "t.json"
+    report.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    th.write_text(json.dumps(thresholds))
+    monkeypatch.setattr(sys, "argv", ["gate", "--report", str(report), "--thresholds", str(th)])
+    return int(gate.main())
+
+
+def test_gate_fails_when_a_configured_family_did_not_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rows = [{"entry_type": "eval", "probe": "dan.Dan_11_0", "passed": 10, "total": 10}]
+    th = {"default": 0.9, "probes": {"dan": 0.9, "web_injection": 0.95}}
+    assert _run_gate(tmp_path, rows, th, monkeypatch) == 1
+    th["probes"].pop("web_injection")
+    assert _run_gate(tmp_path, rows, th, monkeypatch) == 0
+
+
+def test_gate_zero_attempts_is_not_a_pass(tmp_path: Path) -> None:
+    report = tmp_path / "r.report.jsonl"
+    report.write_text(json.dumps({"entry_type": "eval", "probe": "dan.X", "passed": 0, "total": 0}))
+    assert gate.pass_rates(report) == {"dan": 0.0}
+
+
+def test_garak_probe_spec_matches_thresholds() -> None:
+    cfg = yaml.safe_load((ROOT / "redteam/garak/aegisx9.yaml").read_text())
+    spec = next(v for v in _walk(cfg) if isinstance(v, dict) and "probe_spec" in v)["probe_spec"]
+    families = {p.strip().split(".")[0] for p in spec.split(",") if p.strip()}
+    thresholds = json.loads((ROOT / "redteam/garak/thresholds.json").read_text())
+    assert families == set(thresholds["probes"])
+
+
+def _walk(node: object) -> list[object]:
+    out = [node]
+    if isinstance(node, dict):
+        for v in node.values():
+            out += _walk(v)
+    elif isinstance(node, list):
+        for v in node:
+            out += _walk(v)
+    return out
 
 
 def test_rollout_complete() -> None:

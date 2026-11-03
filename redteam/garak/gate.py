@@ -25,7 +25,8 @@ def pass_rates(report: Path) -> dict[str, float]:
         family = str(row["probe"]).split(".")[0]
         passed[family] += int(row["passed"])
         total[family] += int(row["total"])
-    return {f: (passed[f] / total[f] if total[f] else 1.0) for f in total}
+    # A family with no attempts scored nothing: treat it as 0, never as a free pass.
+    return {f: (passed[f] / total[f] if total[f] else 0.0) for f in total}
 
 
 def evaluate(rates: dict[str, float], thresholds: dict[str, object]) -> list[str]:
@@ -51,7 +52,14 @@ def main() -> int:
     if not rates:
         print("no eval rows in report; treating as failure", file=sys.stderr)
         return 1
-    failures = evaluate(rates, json.loads(args.thresholds.read_text(encoding="utf-8")))
+    thresholds = json.loads(args.thresholds.read_text(encoding="utf-8"))
+    # Every configured family must have run: a renamed or skipped probe would otherwise pass
+    # silently (garak's xss module became web_injection; #147).
+    missing = sorted(set(thresholds.get("probes", {})) - set(rates))
+    if missing:
+        print(f"probe families missing from the report: {', '.join(missing)}", file=sys.stderr)
+        return 1
+    failures = evaluate(rates, thresholds)
     if failures:
         print(f"red-team regression in: {', '.join(failures)}", file=sys.stderr)
         return 1
