@@ -262,3 +262,13 @@ def test_default_runner_passes_env() -> None:
         ["/bin/sh", "-c", 'printf %s "$MARK"'], 5, {"MARK": "ok", "PATH": "/bin"}
     )
     assert res.stdout == "ok"
+
+
+def test_garak_pass_rates_reads_garak_017_rows() -> None:
+    # Reading only `total` scored every family 0/0 = a pass (#177).
+    rows = [
+        {"entry_type": "eval", "probe": "encoding.InjectHex", "passed": 1, "total_evaluated": 18},
+        {"entry_type": "eval", "probe": "dan.Dan_11_0", "passed": 0, "total_evaluated": 0},
+    ]
+    rates = rt.garak_pass_rates("\n".join(json.dumps(r) for r in rows))
+    assert rates == {"encoding": 1 / 18, "dan": 0.0}

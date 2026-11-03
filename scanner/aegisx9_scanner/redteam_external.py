@@ -181,10 +181,14 @@ def garak_pass_rates(report_text: str) -> dict[str, float]:
             continue
         if not isinstance(row, dict) or row.get("entry_type") != "eval":
             continue
-        family = str(row.get("probe", "")).split(".")[0]
+        # garak 0.17 counts evaluated outputs in `total_evaluated` (earlier: `total`). Reading
+        # only `total` scored every family 0/0 = a pass, whatever garak found (#177).
+        family = str(row.get("probe", "")).removeprefix("probes.").split(".")[0]
         passed[family] += int(row.get("passed", 0))
-        total[family] += int(row.get("total", 0))
-    return {f: (passed[f] / total[f] if total[f] else 1.0) for f in total}
+        count = row["total_evaluated"] if "total_evaluated" in row else row.get("total", 0)
+        total[family] += int(count)
+    # A family with no evaluated outputs scored nothing: 0, never a free pass.
+    return {f: (passed[f] / total[f] if total[f] else 0.0) for f in total}
 
 
 def garak_failures(
