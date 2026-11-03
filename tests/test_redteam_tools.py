@@ -3,6 +3,7 @@ import datetime as dt
 import http.client
 import importlib.util
 import json
+import re
 import secrets
 import urllib.error
 import urllib.parse
@@ -484,3 +485,15 @@ def test_broken_error_body_keeps_the_status(monkeypatch: pytest.MonkeyPatch) -> 
     req = urllib.request.Request("https://idp.example.com/t")
     with pytest.raises(get_token.TokenError, match=r"^endpoint answered 400$"):
         get_token._fetch_json(req)
+
+
+def test_promptfoo_file_references_resolve_from_the_config_dir() -> None:
+    # promptfoo resolves every file:// path from the config's directory, including those
+    # inside attack files; a path written relative to attacks/ breaks the suite (#147).
+    base = Path(__file__).resolve().parents[1] / "redteam" / "promptfoo"
+    refs = []
+    for f in [base / "promptfooconfig.yaml", *sorted((base / "attacks").glob("*.yaml"))]:
+        refs += re.findall(r"file://([^\s:'\"]+)", f.read_text(encoding="utf-8"))
+    assert refs
+    missing = [r for r in refs if not (base / r).is_file()]
+    assert not missing, missing
