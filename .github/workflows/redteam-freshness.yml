@@ -1,0 +1,27 @@
+# Fails, and so emails the owner, when the staging red-team gate has not succeeded on main
+# for 48 hours. It ran silently not at all for 12 days once (#147): a gate that never runs
+# must look like a broken gate. Runs on GitHub-hosted runners and only reads run history.
+name: redteam-freshness
+
+on:
+  schedule:
+    - cron: "41 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  freshness:
+    if: github.repository == 'mchasse73/aegisx9'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: last successful red-team run on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 redteam/freshness.py --workflow redteam-staging.yml --max-age-hours 48
