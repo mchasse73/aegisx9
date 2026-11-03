@@ -31,6 +31,10 @@ prompts:
 defaultTest:
   options:
     provider: aegisx9-staging
+    # Builds planted values for cases that name a generator (`kind`); others pass through.
+    # Declared here, not in the attack files: promptfoo inlines file:// strings inside test
+    # files when it loads them, so a hook referenced there runs without `require`.
+    transformVars: file://generators/planted-vars.js
   assert:
     - type: javascript
       value: "!output.startsWith('[GATEWAY-ERROR]')"
