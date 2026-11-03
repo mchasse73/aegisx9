@@ -32,6 +32,7 @@ All notable changes to this project are documented here. The format follows
   Allocated budgets now total $125 of the $180 gateway cap.
 
 ### Fixed
+- Staging rollouts were blocked by the namespace quota (#162): each gateway pod declared 1.6 CPU of limits, and a rolling update runs two pods, which with the jobs exceeds the 3-CPU quota, so the PR #152 rollout never started a pod (the old pod kept serving). Staging limits are now gateway 800m and auth 400m (1.3 CPU per pod). New CI step `scripts/ci/check_quota_fit.py` fails a PR whose rendered staging overlay can't roll out within the quota.
 - Red-team gate: the in-cluster runner has no Node, so the install step failed with `npx: command not found`. The workflow now installs Node 22 with a pinned `actions/setup-node` (#150).
 - The staging red-team gate never passed and hadn't run since 2026-10-21 (#147). This change
   fixes the pipeline; the gate goes green only once the machine identity it needs exists.
