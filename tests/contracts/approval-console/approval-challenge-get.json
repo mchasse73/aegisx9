@@ -1,0 +1,344 @@
+{
+  "endpoint": {
+    "method": "GET",
+    "path": "/jobs/approval-challenge/<nonce>"
+  },
+  "roles": [
+    "approver",
+    "operator"
+  ],
+  "description": "The stored statement for a nonce, for the second (third...) signer of an N-of-M approval. The console does not call it today.",
+  "request": {
+    "body_schema": null,
+    "example": null
+  },
+  "responses": [
+    {
+      "name": "found_approver",
+      "status": 200,
+      "when": "approver bearer, known nonce, WebAuthn configured",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "nonce",
+          "statement",
+          "expires",
+          "state",
+          "requester",
+          "policy",
+          "threshold",
+          "signers",
+          "jobs",
+          "webauthn"
+        ],
+        "properties": {
+          "nonce": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "statement": {
+            "type": "string",
+            "pattern": "^x9-build-approval v2\n",
+            "maxLength": 20000
+          },
+          "expires": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "consumed"
+            ]
+          },
+          "requester": {
+            "type": "string",
+            "minLength": 1
+          },
+          "policy": {
+            "type": "object",
+            "required": [
+              "version",
+              "tier",
+              "threshold",
+              "group"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "tier": {
+                "type": "string",
+                "pattern": "^T[0-4]$"
+              },
+              "threshold": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "group": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "signers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "jobs": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^REQ-\\d{8}-\\d{3}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "webauthn": {
+            "type": "object",
+            "required": [
+              "challenge",
+              "rp_id",
+              "user_verification",
+              "allow_credentials"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "challenge": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "rp_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "user_verification": {
+                "type": "string",
+                "const": "required"
+              },
+              "allow_credentials": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "id"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "public-key"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]+$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "nonce": "3f9c2a7e5b1d4c8a9e6f0b2d7a4c1e8f",
+        "statement": "x9-build-approval v2\ndate: 2026-11-03\ndecision: approve\nnonce: 3f9c2a7e5b1d4c8a9e6f0b2d7a4c1e8f\nexpires: 2026-11-03T12:15:00Z\nrequester: requester-agent\npolicy: sha256:396feacff4f0cc244215374644c26e6e0bd264929e6d38807135c00d4570f8b1 tier=T4 threshold=1 group=owner\njob: REQ-20261103-001 sha256:131f050bd5e4be49457389df9bee7575ed5c22a5e1c1071df21f0c8e516089cb\n",
+        "expires": "2026-11-03T12:15:00Z",
+        "state": "open",
+        "requester": "requester-agent",
+        "policy": {
+          "version": "sha256:396feacff4f0cc244215374644c26e6e0bd264929e6d38807135c00d4570f8b1",
+          "tier": "T4",
+          "threshold": 1,
+          "group": "owner"
+        },
+        "threshold": 1,
+        "signers": [],
+        "jobs": {
+          "REQ-20261103-001": "131f050bd5e4be49457389df9bee7575ed5c22a5e1c1071df21f0c8e516089cb"
+        },
+        "webauthn": {
+          "challenge": "N4HRwraBB04vpT4rH-hAJjeNMzfLCYDOgdYemAr7yrc",
+          "rp_id": "console.example.com",
+          "user_verification": "required",
+          "allow_credentials": [
+            {
+              "type": "public-key",
+              "id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "found_operator",
+      "status": 200,
+      "when": "operator gate token, known nonce",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "nonce",
+          "statement",
+          "expires",
+          "state",
+          "requester",
+          "policy",
+          "threshold",
+          "signers",
+          "jobs"
+        ],
+        "properties": {
+          "nonce": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "statement": {
+            "type": "string",
+            "pattern": "^x9-build-approval v2\n",
+            "maxLength": 20000
+          },
+          "expires": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "consumed"
+            ]
+          },
+          "requester": {
+            "type": "string",
+            "minLength": 1
+          },
+          "policy": {
+            "type": "object",
+            "required": [
+              "version",
+              "tier",
+              "threshold",
+              "group"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "tier": {
+                "type": "string",
+                "pattern": "^T[0-4]$"
+              },
+              "threshold": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "group": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "signers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "jobs": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^REQ-\\d{8}-\\d{3}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "nonce": "3f9c2a7e5b1d4c8a9e6f0b2d7a4c1e8f",
+        "statement": "x9-build-approval v2\ndate: 2026-11-03\ndecision: approve\nnonce: 3f9c2a7e5b1d4c8a9e6f0b2d7a4c1e8f\nexpires: 2026-11-03T12:15:00Z\nrequester: requester-agent\npolicy: sha256:396feacff4f0cc244215374644c26e6e0bd264929e6d38807135c00d4570f8b1 tier=T4 threshold=1 group=owner\njob: REQ-20261103-001 sha256:131f050bd5e4be49457389df9bee7575ed5c22a5e1c1071df21f0c8e516089cb\n",
+        "expires": "2026-11-03T12:15:00Z",
+        "state": "open",
+        "requester": "requester-agent",
+        "policy": {
+          "version": "sha256:396feacff4f0cc244215374644c26e6e0bd264929e6d38807135c00d4570f8b1",
+          "tier": "T4",
+          "threshold": 1,
+          "group": "owner"
+        },
+        "threshold": 1,
+        "signers": [],
+        "jobs": {
+          "REQ-20261103-001": "131f050bd5e4be49457389df9bee7575ed5c22a5e1c1071df21f0c8e516089cb"
+        }
+      }
+    },
+    {
+      "name": "unknown_nonce",
+      "status": 404,
+      "when": "nonce is not 32 lowercase hex or was never issued (or was pruned after two days)",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "const": "unknown nonce"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "unknown nonce"
+      }
+    },
+    {
+      "name": "not_operator",
+      "status": 403,
+      "when": "a project gate token",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "const": "operator only (or the approval console)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "operator only (or the approval console)"
+      }
+    }
+  ]
+}

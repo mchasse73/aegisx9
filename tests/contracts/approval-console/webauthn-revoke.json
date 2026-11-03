@@ -1,0 +1,133 @@
+{
+  "endpoint": {
+    "method": "POST",
+    "path": "/jobs/webauthn/revoke"
+  },
+  "roles": [
+    "operator",
+    "contain"
+  ],
+  "description": "One call disables a credential (containment). Not an approver endpoint: a console bearer gets auth.json approver_forbidden_route. The console does not call it.",
+  "request": {
+    "body_schema": {
+      "type": "object",
+      "required": [
+        "credential"
+      ],
+      "properties": {
+        "credential": {
+          "type": "string",
+          "pattern": "^(sha256:)?([0-9a-f]{16}|[0-9a-f]{64})$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "example": {
+      "credential": "0000000000000001"
+    }
+  },
+  "responses": [
+    {
+      "name": "revoked",
+      "status": 200,
+      "when": "operator or contain token, known active credential",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "credential",
+          "state",
+          "principal"
+        ],
+        "properties": {
+          "credential": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$"
+          },
+          "state": {
+            "type": "string",
+            "const": "revoked"
+          },
+          "principal": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "credential": "0000000000000001",
+        "state": "revoked",
+        "principal": "approver@example.com"
+      }
+    },
+    {
+      "name": "not_found",
+      "status": 404,
+      "when": "credential missing, not 16/64 hex, unknown, or a 16-hex prefix shared by two credentials. NOTE: an unknown credential is this 404 without a code; the registry's 'unknown' refusal code is never reached through this route",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^credential: "
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "credential: its sha256 (16 or 64 hex, unique) required"
+      }
+    },
+    {
+      "name": "already_revoked",
+      "status": 409,
+      "when": "the credential is already revoked",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "minLength": 1
+          },
+          "code": {
+            "type": "string",
+            "const": "state"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "credential is already revoked",
+        "code": "state"
+      }
+    },
+    {
+      "name": "forbidden",
+      "status": 403,
+      "when": "a project gate token",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "const": "operator or the contain identity only"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "operator or the contain identity only"
+      }
+    }
+  ]
+}
