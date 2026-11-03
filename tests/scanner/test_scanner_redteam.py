@@ -104,8 +104,12 @@ def test_parsers(tmp_path: Path) -> None:
     thresholds = json.loads((ROOT / "redteam/garak/thresholds.json").read_text())
     assert rt.garak_failures(rates, thresholds) == [("dan", 0.9, 0.95), ("encoding", 0.5, 0.9)]
     assert rt.garak_failures({"x": 1.0}, {"probes": "bad"}) == []
-    gen = rt.generator_options("https://gateway.example.com/", "m")
+    gen = rt.generator_options("https://gateway.example.com/")
     assert gen["openai"]["OpenAICompatible"]["uri"] == "https://gateway.example.com/v1"  # type: ignore[index]
+    assert "model" not in gen["openai"]["OpenAICompatible"]  # type: ignore[index]
+    argv = rt.garak_argv("py", Path("c.yaml"), Path("g.json"), Path("r/p"), "m-1")
+    assert argv[argv.index("--target_name") + 1] == "m-1"
+    assert argv[argv.index("--target_type") + 1] == "openai.OpenAICompatible"
 
 
 def test_run_redteam_full(cfg: rt.RedteamConfig, key_file: Path, tmp_path: Path) -> None:
