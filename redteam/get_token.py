@@ -104,7 +104,7 @@ def _fetch_json(request: urllib.request.Request) -> Mapping[str, Any]:
     except urllib.error.HTTPError as e:
         try:
             code = oauth_error_code(e.read(4096))
-        except OSError:
+        except Exception:  # best effort: a broken error body must not hide the status
             code = None
         suffix = f" ({code})" if code else ""
         raise TokenError(f"endpoint answered {e.code}{suffix}") from None
@@ -129,6 +129,8 @@ def github_oidc_token(env: Mapping[str, str], audience: str, fetch: Fetch) -> st
         value = fetch(req).get("value")
     except TokenError as e:
         raise TokenError(f"GitHub OIDC token: {e}") from None
+    except Exception as e:  # transport or decoding: the type only, never the message
+        raise TokenError(f"GitHub OIDC token: failed ({type(e).__name__})") from None
     if not isinstance(value, str) or not value:
         raise TokenError("GitHub OIDC answer has no token")
     return value
@@ -178,6 +180,8 @@ def request_token(env: Mapping[str, str], fetch: Fetch = _fetch_json) -> tuple[s
         if "client_assertion" in form:
             detail = "; " + describe_assertion(form["client_assertion"], env)
         raise TokenError(f"identity provider token request: {e}{detail}") from None
+    except Exception as e:  # transport or decoding: the type only, never the message
+        raise TokenError(f"identity provider token request: failed ({type(e).__name__})") from None
     token = data.get("access_token")
     if not isinstance(token, str) or not token:
         raise TokenError("token response has no access token")

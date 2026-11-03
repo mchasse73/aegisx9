@@ -452,3 +452,35 @@ def test_refused_assertion_reports_its_shape() -> None:
 
     with pytest.raises(get_token.TokenError, match=r"sub shape repo=:environment="):
         get_token.request_token(env, fetch)
+
+
+@pytest.mark.parametrize(
+    ("fail_on", "prefix"),
+    [("audience=", "GitHub OIDC token"), ("token/", "identity provider token request")],
+)
+def test_transport_errors_name_the_step(fail_on: str, prefix: str) -> None:
+    def fetch(req: urllib.request.Request) -> dict:  # type: ignore[type-arg]
+        if fail_on in req.full_url:
+            raise ConnectionResetError("details that must not be printed")
+        return {"value": secrets.token_urlsafe(16)}
+
+    with pytest.raises(get_token.TokenError) as err:
+        get_token.request_token(_token_env(), fetch)
+    assert str(err.value) == f"{prefix}: failed (ConnectionResetError)"
+
+
+def test_broken_error_body_keeps_the_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    import http.client
+    import io
+
+    class Broken(io.BytesIO):
+        def read(self, *_a: object) -> bytes:
+            raise http.client.IncompleteRead(b"")
+
+    def urlopen(*_a: object, **_k: object) -> None:
+        raise urllib.error.HTTPError("https://idp.example.com/t", 400, "Bad", {}, Broken())  # type: ignore[arg-type]
+
+    monkeypatch.setattr(get_token.urllib.request, "urlopen", urlopen)
+    req = urllib.request.Request("https://idp.example.com/t")
+    with pytest.raises(get_token.TokenError, match=r"^endpoint answered 400$"):
+        get_token._fetch_json(req)
