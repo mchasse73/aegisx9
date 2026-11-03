@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- ADR 0021, delivery spine and one-pane console (#107, #108): one hub id per change (the gate's
+  request id) with every other id joined by `spine.link` events and kept as log fields, never
+  labels; one source of truth per fact; production deploys only gate-signed release commits on
+  `env/prod`, which Argo CD verifies against the gate's release key (outbound only, fails closed);
+  the approval console grows into developer, manager and approver views (approver first, after
+  #86); DORA, approval latency and a signed evidence export per release. Today's gaps are listed:
+  production tracks `main`, and image admission fails open on webhook errors.
 - Staging gateway accepts the red-team job's machine identity as a second token issuer (15-minute tokens, mapped to the staging-tests team), so the red-team gate no longer needs a stored gateway key (#147).
 - Red-team freshness alert (#147): a scheduled workflow on GitHub-hosted runners fails, and so
   emails the owner, when `redteam-staging` hasn't succeeded on `main` for 48 hours.
