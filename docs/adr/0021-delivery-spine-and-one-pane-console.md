@@ -61,8 +61,11 @@ never an authorization (ADR 0012, ADR 0014).
 
 1. A pull request gets a gate request of type `vcs-change`, created by the gate's GitHub App
    connector polling with a short-lived installation token. A required status check from that
-   App (bypass list empty) holds the merge until the statement is signed. A new push is a new
-   head, a new spec hash and a new request.
+   App (bypass list empty) holds the merge until the statement is signed. The spec binds the
+   head, base and target branch: a new push, a moved base or a retargeted PR is a new spec
+   hash and a new request. The branch must be up to date with its base before merge (strict
+   status checks), or the gate signs the exact merge-queue result, so a signed head can't be
+   merged against a base the signature never covered.
 2. Merge, then the release workflow builds once, scans, writes an SBOM and signs keylessly
    (ADR 0002). Staging may track the default branch with automated sync at a low tier.
 3. Promotion to production is its own gate request of type `deploy` (environment, digest,
@@ -72,8 +75,10 @@ never an authorization (ADR 0012, ADR 0014).
    statement hash, spec hash, digest, source commit, work keys), signed with the gate's
    release key, through the code host's API with a 1-hour repo-scoped token.
 5. Argo CD's production Application tracks `env/prod` with automated sync, and its project's
-   signature keys list **only** the gate's release key. Admission re-verifies the image
-   signature and fails closed in production.
+   signature keys list **only** the gate's release key. Production gets its own Argo CD
+   project for this, because signature keys apply to every Application in a project and
+   staging keeps tracking the default branch. Admission re-verifies the image signature and
+   fails closed in production.
 
 This is outbound only (ADR 0017): the gate pushes to the code host and Argo CD pulls; nothing
 calls in. It fails closed: no gate means no release commit, so production is unchanged; an
@@ -85,6 +90,10 @@ branch protection alone were rejected (the first needs write access to Argo CD a
 the second makes a review the authority). Rollback is a new gated change from a low-tier
 "roll back to a released digest" template. To be proven in a test repository first: Argo CD
 accepts a commit signed through the code host's API and refuses unsigned revisions.
+Signature verification proves who signed a revision, not that it is the current `env/prod`
+head: an older gate-signed release still verifies. So routine identities get no production
+sync, override or Application-update permission, and a test proves they can't deploy an older
+signed release; a rollback is always a new gated change.
 
 **Infrastructure changes** go through the executor: a request carrying the work key inside
 its spec hash, policy evaluation and a read-only pre-flight review, approval (a standard
@@ -117,7 +126,8 @@ gate.
 
 **Metrics from the spine**, computed by the console backend because they need joins:
 
-- deployment frequency: successful production syncs of a gate release commit;
+- deployment frequency: distinct gate releases that reached production per environment,
+  counted once each (repeat and self-heal syncs of the same release are excluded);
 - lead time for changes: first commit of the PR to the production sync of the release that
   contains it;
 - change failure rate: production releases followed within 7 days by an incident linked
@@ -159,8 +169,13 @@ code-host egress for an hour deploys nothing and the backlog then clears.
 
 No mirror can approve. A compromised tracker can move a status but nothing reads it for
 authority. A compromised code host can push to `env/prod` but can't sign as the gate's release
-key, which it never holds. A compromised Argo CD admin can sync manually or edit the
-signature keys; both are detected and the controller keeps the signed state. A compromised
+key, which it never holds. A compromised Argo CD admin is an enforcement bypass,
+not only a detection: replacing the trusted signature keys with their own lets them deploy
+manifests they signed (still referencing an approved image while changing its command or
+configuration), and a manual sync can select an older signed release. Prevention is
+therefore no standing Argo CD admin in production (just-in-time, hardware-approved access,
+ADR 0019); detection is the project drift and non-automated sync alerts below; containment
+is revoking the admin session and restoring the declared project from git. A compromised
 console shows misleading content but holds no key, and the gate notifies approvers from its
 own record. A stolen release key can sign a commit but can't create the matching request,
 approvals and audit entry. Detections (added to #113), each with a known-positive test and a
@@ -169,7 +184,9 @@ not pushed by the gate's App; a production sync not started by the automated con
 project or Application drift from declared state; production revision differing from the
 gate's latest release for more than 15 minutes, or a running digest in no release record; a
 release record naming a request or statement with no audit entry; an infrastructure change
-with no request and no emergency record; a tracker change made outside the sync identity.
+with no request and no emergency record; a change to a gate-owned mirrored tracker field (authorization status, release links)
+made outside the sync identity. Ordinary tracker edits (priority, incident lifecycle) are the
+tracker's own facts and raise nothing.
 Containment is one step per component (revoke the token or App key, disable the approver
 role, rotate the release key and replace the controller's signature keys), and recovery
 re-applies declared state from git and reconciles mirrors from the gate.
