@@ -294,7 +294,8 @@
         "jobs": {
           "REQ-20261103-001": "131f050bd5e4be49457389df9bee7575ed5c22a5e1c1071df21f0c8e516089cb"
         }
-      }
+      },
+      "console_action": "relay"
     },
     {
       "name": "bad_job_ids",

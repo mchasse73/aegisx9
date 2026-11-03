@@ -106,6 +106,8 @@ Corrections made in this copy (also sent upstream):
   of the example's own statement.
 - The register request schema accepts the full `PublicKeyCredential.toJSON()` registration response
   (`authenticatorData`, `publicKey` and `publicKeyAlgorithm` are optional).
+- `approval-challenge` `issued_operator` carries `console_action: relay`, because an approver also receives it when
+  WebAuthn is not configured. The page must then show that signing is unavailable.
 
 Planned product differences, each to be made here first (see "The rule") when the gate is built:
 
