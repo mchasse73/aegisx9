@@ -16,6 +16,7 @@ helmCharts:
     valuesFile: values.yaml
 images:
   - name: ghcr.io/mchasse73/aegisx9
-    # v0.4.0: the signed digest from the release workflow for main 66f664b (2026-10-29), the
-    # same index the 0.4.0 tag points at. Brings the auth sidecar (ADR 0010) enabled below.
-    digest: sha256:375c1d87235d6d95669154ced15f1f7bda54042d5c24d8957b3cc5b146aed30d
+    # v0.4.2: the signed digest from the release workflow for main ea1df13 (2026-11-03), the
+    # same index the 0.4.2 tag points at (tag run verified main's signatures, then re-tagged).
+    # Guard blocks answer 400 invalid_request_error instead of 500 (#171).
+    digest: sha256:02c3355ec5c1968b4fcb4fb08285da676937e5be80ae65b90f9d2ff15fd73645
