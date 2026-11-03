@@ -60,6 +60,17 @@ gateway:
         userClaim: sub
         groupsClaim: groups
         maxLifetimeSeconds: 900
+      # The red-team job's machine identity (#147): a token minted from the job's own GitHub
+      # Actions OIDC token, accepted by the identity provider only for this repository's
+      # main-branch red-team workflow; its group maps to the staging-tests team.
+      - name: redteam
+        issuerEnv: AEGIS_RT_JWT_ISSUER
+        jwksUrlEnv: AEGIS_RT_JWT_JWKS_URL
+        audienceEnv: AEGIS_RT_JWT_AUDIENCE
+        groupTeamsEnv: AEGIS_RT_JWT_GROUP_TEAMS
+        userClaim: sub
+        groupsClaim: groups
+        maxLifetimeSeconds: 900
 opsJobs:
   priorityClassName: aegisx9-low
 wif:
