@@ -74,3 +74,12 @@ def test_signed_audit_sink(caplog: pytest.LogCaptureFixture) -> None:
         guard.post_call({}, "fine answer")
     envelope = json.loads(caplog.records[-1].getMessage())
     assert verify_envelope(envelope, signer)
+
+
+def test_guard_block_is_a_client_error_not_a_server_fault() -> None:
+    # LiteLLM's proxy answers with the exception's status_code and type; a 500 made
+    # clients retry every blocked prompt (#171).
+    err = GuardBlockedError("prompt_injection", Direction.INPUT)
+    assert err.status_code == 400
+    assert err.type == "invalid_request_error"
+    assert err.message == str(err) == "request blocked by prompt_injection (input guard)"

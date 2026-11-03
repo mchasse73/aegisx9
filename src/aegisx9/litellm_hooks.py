@@ -33,10 +33,21 @@ audit_logger = logging.getLogger("aegisx9.audit")
 
 
 class GuardBlockedError(Exception):
-    """Raised to make the proxy reject a request. The message never echoes content."""
+    """Raised to make the proxy reject a request. The message never echoes content.
+
+    A block is the caller's request being refused, not a server fault: LiteLLM's proxy
+    answers with the exception's ``status_code`` and ``type`` (OpenAI error shape), so it is
+    a 400 ``invalid_request_error``. As a plain exception it was a 500, which clients and
+    SDKs retry with backoff (#171). The message keeps its ``request blocked by`` prefix;
+    the red-team suites and clients key off it.
+    """
+
+    status_code = 400
+    type = "invalid_request_error"
 
     def __init__(self, guard: str, direction: Direction) -> None:
-        super().__init__(f"request blocked by {guard} ({direction.value} guard)")
+        self.message = f"request blocked by {guard} ({direction.value} guard)"
+        super().__init__(self.message)
         self.guard = guard
         self.direction = direction
 
