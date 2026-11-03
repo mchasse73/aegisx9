@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Staging gateway accepts the red-team job's machine identity as a second token issuer (15-minute tokens, mapped to the staging-tests team), so the red-team gate no longer needs a stored gateway key (#147).
 - Red-team freshness alert (#147): a scheduled workflow on GitHub-hosted runners fails, and so
   emails the owner, when `redteam-staging` hasn't succeeded on `main` for 48 hours.
 - Approval console contract fixture (`tests/contracts/approval-console/`, #108, #109): one JSON
