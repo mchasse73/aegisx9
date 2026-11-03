@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Staging runs v0.4.2 (digest `sha256:02c3355e…`, the signed index the 0.4.2 tag points at), so guard blocks there answer 400 (#171).
+
 ## [0.4.2] - 2026-11-03
 
 ### Added
