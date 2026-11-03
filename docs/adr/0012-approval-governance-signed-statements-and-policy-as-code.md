@@ -65,11 +65,16 @@ The server keeps one record per signer: principal, credential id, user-presence 
 user-verification flags, signature counter, time and method (WebAuthn or SSH signature).
 Expiry and the spec hash are checked when the approval is made, again when the executor
 starts, and before each irreversible step. A spec that changes after review is not covered.
-A signature counter that goes backwards is rejected and raises an alert.
+A signature counter that goes backwards is rejected and raises an alert. A key that always
+reports 0 is counter-less: 0 followed by 0 is accepted and recorded as such, while any
+non-zero counter that does not increase is rejected and alerts. The counter is checked only
+after the signature verifies, so a forged assertion cannot raise the alert.
 
 **Signing methods.** In the browser, WebAuthn uses `userVerification: "required"` and the
-hardware key on the approver's own machine. The RP ID is the console's exact hostname, the
-user handle is the approver principal, and each key gets its own credential. On the command
+hardware key on the approver's own machine. The RP ID is the console's exact hostname and
+each key gets its own credential. The approver principal is bound by looking up the credential
+id in the server's registry; the user handle, which authenticators often omit for non-resident
+credentials, is checked against it only when present. On the command
 line, SSH signatures from resident hardware-backed keys are used, and the server checks the
 user-verification flag. Enrolling an approver credential requires an existing
 hardware-signed approval. A web session alone can never add a key.

@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- ADR 0012 wording (#108, #109): keys that always report a signature counter of 0 are
+  accepted as counter-less, a non-zero counter that does not increase is refused and alerts,
+  and the counter is checked only after the signature verifies. The approver principal is
+  bound by the credential-id registry, and the user handle is checked only when the
+  authenticator sends one. Enrolment stays as written: only an existing hardware-signed
+  approval can add a key (owner 2026-11-03).
 - Staging: the developers team's 30-day cap rises from $50 to $75 (owner decision
   2026-10-29), so all three developers in the Coder quota can use their full $25 each.
   Allocated budgets now total $125 of the $180 gateway cap.
