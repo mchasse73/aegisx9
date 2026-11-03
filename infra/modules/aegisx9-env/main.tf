@@ -227,6 +227,31 @@ resource "github_repository_environment" "this" {
   }
 }
 
+# The staging red-team gate's environment (#147, owner 2026-11-03): main only, and no required
+# reviewer, so the daily scheduled run starts on its own. Every other runner guard stays in the
+# workflow (no PR or fork triggers, repository + main + event checks), and the job holds no
+# stored gateway key: it federates its own GitHub OIDC token to the identity provider.
+resource "github_repository_environment" "redteam" {
+  count               = var.environment == "staging" ? 1 : 0
+  repository          = data.github_repository.this.name
+  environment         = "redteam"
+  prevent_self_review = false
+  can_admins_bypass   = false
+  # Exactly main, not "any protected branch": a later protected branch must not inherit an
+  # unreviewed path onto the in-cluster runners.
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+resource "github_repository_environment_deployment_policy" "redteam_main" {
+  count          = var.environment == "staging" ? 1 : 0
+  repository     = data.github_repository.this.name
+  environment    = github_repository_environment.redteam[0].environment
+  branch_pattern = "main"
+}
+
 resource "github_branch_protection" "main" {
   count                           = var.manage_branch_protection ? 1 : 0
   repository_id                   = data.github_repository.this.node_id

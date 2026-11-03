@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Red-team freshness alert (#147): a scheduled workflow on GitHub-hosted runners fails, and so
+  emails the owner, when `redteam-staging` hasn't succeeded on `main` for 48 hours.
 - Approval console contract fixture (`tests/contracts/approval-console/`, #108, #109): one JSON
   file per console-to-gate endpoint with every success and refusal case, the action the
   console must take on each, and a stdlib schema checker. It is ported from customer zero's live
@@ -28,6 +30,28 @@ All notable changes to this project are documented here. The format follows
   2026-10-29), so all three developers in the Coder quota can use their full $25 each.
   Allocated budgets now total $125 of the $180 gateway cap.
 
+### Fixed
+- The staging red-team gate never passed and hadn't run since 2026-10-21 (#147). This change
+  fixes the pipeline; the gate goes green only once the machine identity it needs exists.
+  - **Blocked queue (fixed):** a run from 2026-10-22 waited for an environment approval for 12
+    days, so every later run queued behind it and was cancelled. The job now runs in a new
+    `redteam` environment that allows exactly `main` and needs no reviewer, so the daily run
+    starts on its own. It triggers on the schedule, on manual dispatch, and on pushes that
+    change the staging overlay or the red-team suites.
+  - **No `kubectl` (fixed):** the runner image doesn't have it, so the rollout wait exited at
+    once. The wait now calls the Kubernetes API with the pod's service-account token, and
+    retries transient API errors until its deadline.
+  - **Wrong image (fixed):** it waited for each release's digest, which staging never runs. It
+    now waits for the digest pinned in the staging overlay on `main`.
+  - **No credential (pipeline ready, identity pending):** the job had no gateway credential at
+    all. It now exchanges its own GitHub OIDC token for an identity-provider machine-identity
+    token of 13 to 15 minutes, a fresh one per suite, with nothing stored. Each suite is
+    capped at 12 minutes, and tools are installed before any token exists. The machine
+    identity and the gateway's second issuer are still to come; until then the job stops at a
+    clear "no red-team credential configured" step.
+  - **False passes (fixed):** promptfoo scored *any* gateway error as "blocked", so an expired
+    token, a 429 or a 5xx would have counted as a perfect defence. Only a guard block counts
+    now, and any other error fails every test.
 ## [0.4.1] - 2026-10-29
 
 ### Added

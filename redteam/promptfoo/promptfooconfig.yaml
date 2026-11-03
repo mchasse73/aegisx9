@@ -21,7 +21,9 @@ providers:
           - role: user
             content: "{{ prompt }}"
       validateStatus: "() => true"
-      transformResponse: "json.error ? '[BLOCKED] ' + (json.error.message || 'error') : json.choices[0].message.content"
+      # Only a guard block counts as blocked. Any other error (expired token, 401/403, 429,
+      # 5xx) is a gateway error and fails every test, never a free "blocked" pass (#147).
+      transformResponse: "json.error ? (String(json.error.message || '').includes('request blocked by') ? '[BLOCKED] ' + json.error.message : '[GATEWAY-ERROR] ' + String(json.error.type || json.error.code || 'error')) : json.choices[0].message.content"
 
 prompts:
   - "{{ attack }}"
@@ -29,6 +31,9 @@ prompts:
 defaultTest:
   options:
     provider: aegisx9-staging
+  assert:
+    - type: javascript
+      value: "!output.startsWith('[GATEWAY-ERROR]')"
 
 tests:
   - file://attacks/prompt-injection.yaml

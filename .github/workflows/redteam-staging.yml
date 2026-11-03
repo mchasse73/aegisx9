@@ -3,18 +3,24 @@
 # SECURITY: this workflow runs on self-hosted, ephemeral ARC runners inside the homelab
 # k3s cluster (label aegisx9-arc). It must NEVER run code from a pull request or a fork:
 #   - no pull_request / pull_request_target trigger (do not add one);
-#   - every job has an `if:` guard requiring this repository, refs/heads/main and a
-#     non-PR event, and (for workflow_run) a successful push-triggered release on main;
-#   - every job targets the protected `staging` environment (required reviewers,
-#     deployment branches limited to main).
+#   - the job has an `if:` guard requiring this repository, refs/heads/main and a push,
+#     schedule or workflow_dispatch event;
+#   - the job targets the `redteam` environment, whose deployment-branch rule allows only
+#     main. It has no required reviewer, so the daily run can start on its own (owner
+#     2026-11-03, #147); it holds no stored gateway key (see get_token.py).
 # See SECURITY.md "CI runner policy".
+#
+# What it tests: the image the staging overlay on main pins, once Argo CD runs it. It used
+# to wait for every release digest, which staging never runs (it moves only by a pin PR).
 name: redteam-staging
 
 on:
-  workflow_run:
-    workflows: [release]
-    types: [completed]
+  push:
     branches: [main]
+    paths:
+      - deploy/overlays/staging/**
+      - redteam/**
+      - .github/workflows/redteam-staging.yml
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
@@ -36,56 +42,73 @@ jobs:
     if: >-
       github.repository == 'mchasse73/aegisx9'
       && github.ref == 'refs/heads/main'
-      && github.event_name != 'pull_request'
-      && github.event_name != 'pull_request_target'
-      && (github.event_name != 'workflow_run'
-          || (github.event.workflow_run.conclusion == 'success'
-              && github.event.workflow_run.event == 'push'
-              && github.event.workflow_run.head_branch == 'main'
-              && github.event.workflow_run.head_repository.full_name == 'mchasse73/aegisx9'))
+      && (github.event_name == 'push'
+          || github.event_name == 'schedule'
+          || github.event_name == 'workflow_dispatch')
     runs-on: aegisx9-arc
-    environment: staging
+    environment: redteam
     timeout-minutes: 60
     permissions:
       contents: read
-      actions: read # download the digest artifact from the triggering release run
+      id-token: write # the job's own OIDC token is its identity-provider credential
     env:
       AEGIS_STAGING_URL: ${{ secrets.AEGIS_STAGING_URL }} # a secret, not a variable: masked from the first log line
       AEGISX9_EXTRA_IDENTIFIER_PATTERNS: ${{ secrets.INTERNAL_IDENTIFIER_PATTERNS }}
-      AEGIS_REDTEAM_MODEL: ${{ vars.AEGIS_REDTEAM_MODEL }}
+      AEGIS_REDTEAM_MODEL: ${{ vars.AEGIS_REDTEAM_MODEL || 'claude-haiku-5-5' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           persist-credentials: false
-      - name: fetch released digest
-        if: github.event_name == 'workflow_run'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: image-digest
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ github.token }}
-      - name: wait for staging to run the released digest
-        if: github.event_name == 'workflow_run'
-        run: python3 redteam/wait_for_rollout.py --namespace aegisx9-staging --digest-file digest.txt
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+      # Third-party tools are fetched before any token exists, and every step that runs them
+      # unsets GitHub's OIDC request variables, so a compromised dependency can neither read
+      # the identity-provider settings nor mint its own assertion.
+      - name: install promptfoo and garak
+        shell: bash
+        run: |
+          unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
+          npx --yes "promptfoo@${PROMPTFOO_VERSION}" --version
+          pip install "garak==${GARAK_VERSION}"
+      - name: wait for staging to run the pinned digest
+        run: >-
+          python3 redteam/wait_for_rollout.py --namespace aegisx9-staging
+          --overlay deploy/overlays/staging/kustomization.yaml --timeout 1200
+      # Each suite gets its own token: tokens live at most 15 minutes, and the key the
+      # gateway mints from one expires with it. get_token.py refuses a token that would not
+      # outlive the suite's 12-minute cap. The identity-provider settings are secrets (they
+      # name internal endpoints) and exist only in these two steps.
+      - name: gateway token for promptfoo
+        env:
+          AEGIS_RT_TOKEN_URL: ${{ secrets.AEGIS_RT_TOKEN_URL }}
+          AEGIS_RT_CLIENT_ID: ${{ secrets.AEGIS_RT_CLIENT_ID }}
+          AEGIS_RT_ASSERTION_AUDIENCE: ${{ secrets.AEGIS_RT_ASSERTION_AUDIENCE }}
+          AEGIS_RT_CLIENT_SECRET: ${{ secrets.AEGIS_RT_CLIENT_SECRET }} # fallback only; unset when federated
+        run: python3 redteam/get_token.py
       - name: promptfoo suite
         shell: bash
-        env:
-          AEGIS_REDTEAM_KEY: ${{ secrets.AEGIS_REDTEAM_KEY }}
+        timeout-minutes: 12
         run: |
+          unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
           npx --yes "promptfoo@${PROMPTFOO_VERSION}" eval \
             --config redteam/promptfoo/promptfooconfig.yaml \
             --no-cache --no-share --output redteam/results/promptfoo.json 2>&1 \
             | python3 scripts/ci/redact_log.py --mask-env AEGIS_STAGING_URL
+      - name: gateway token for garak
+        env:
+          AEGIS_RT_TOKEN_URL: ${{ secrets.AEGIS_RT_TOKEN_URL }}
+          AEGIS_RT_CLIENT_ID: ${{ secrets.AEGIS_RT_CLIENT_ID }}
+          AEGIS_RT_ASSERTION_AUDIENCE: ${{ secrets.AEGIS_RT_ASSERTION_AUDIENCE }}
+          AEGIS_RT_CLIENT_SECRET: ${{ secrets.AEGIS_RT_CLIENT_SECRET }} # fallback only; unset when federated
+        run: python3 redteam/get_token.py
       - name: garak suite
         shell: bash
-        env:
-          OPENAICOMPATIBLE_API_KEY: ${{ secrets.AEGIS_REDTEAM_KEY }}
+        timeout-minutes: 12
         run: |
-          pip install "garak==${GARAK_VERSION}"
+          unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
+          export OPENAICOMPATIBLE_API_KEY="${AEGIS_REDTEAM_KEY}"
           python3 redteam/garak/render_generator.py > "${RUNNER_TEMP}/garak-generator.json"
           python3 -m garak --config redteam/garak/aegisx9.yaml \
             --generator_option_file "${RUNNER_TEMP}/garak-generator.json" \

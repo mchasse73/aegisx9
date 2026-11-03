@@ -25,15 +25,17 @@ The self-hosted runners can reach the staging environment, so they must never ex
 code an outsider controls. This is enforced in the workflows, not just by convention:
 
 1. Jobs that use `runs-on: aegisx9-arc` (`redteam-staging`, `deploy-smoke`,
-   `infra-apply`) are only in workflows triggered by `push` to `main`, `workflow_run` of the release workflow on `main`, or `workflow_dispatch`.
+   `infra-apply`) are only in workflows triggered by `push` to `main`, `workflow_run` of the release workflow on `main`, a `schedule`, or `workflow_dispatch`.
    **No such workflow has a `pull_request` or `pull_request_target` trigger.**
 2. Each such job has an `if:` guard that requires `github.repository ==
    'mchasse73/aegisx9'`, `github.ref == 'refs/heads/main'` and an event that is not a pull
    request, so a copied workflow in a fork, or a future trigger change, still cannot
    schedule it.
-3. Each such job targets a **protected environment** (`staging` or `production`) with
-   required reviewers and a deployment-branch rule limited to `main`. A job cannot start
-   on a runner until a reviewer approves it.
+3. Each such job targets a **protected environment** with a deployment-branch rule limited
+   to `main`. `staging` and `production` also need a reviewer's approval before a job can
+   start on a runner. The `redteam` environment (the scheduled red-team gate) has no
+   reviewer, so it can run unattended, and its job holds no stored credential: it exchanges
+   its own GitHub OIDC token for a 15-minute identity-provider token (#147).
 4. The ARC runner scale set is registered to this repository only, its pods are
    ephemeral (one job per pod), run as non-root, and their network policy allows only
    the staging gateway and GitHub.
