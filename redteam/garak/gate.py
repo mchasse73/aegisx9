@@ -22,9 +22,11 @@ def pass_rates(report: Path) -> dict[str, float]:
         row = json.loads(line)
         if row.get("entry_type") != "eval":
             continue
-        family = str(row["probe"]).split(".")[0]
+        # garak 0.17 counts evaluated outputs in `total_evaluated` (earlier: `total`); a row
+        # with neither raises, so an unreadable report fails the gate (#177).
+        family = str(row["probe"]).removeprefix("probes.").split(".")[0]
         passed[family] += int(row["passed"])
-        total[family] += int(row["total"])
+        total[family] += int(row["total_evaluated"] if "total_evaluated" in row else row["total"])
     # A family with no attempts scored nothing: treat it as 0, never as a free pass.
     return {f: (passed[f] / total[f] if total[f] else 0.0) for f in total}
 

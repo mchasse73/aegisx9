@@ -562,3 +562,27 @@ def test_describe_access_token_reports_names_and_membership_only() -> None:
     assert get_token.describe_access_token("opaque", {}) == "access token is not a readable JWT"
     as_list = "e30." + base64.urlsafe_b64encode(b"[1]").decode().rstrip("=") + ".x"
     assert get_token.describe_access_token(as_list, {}) == "access token is not a readable JWT"
+
+
+def test_gate_reads_garak_017_eval_rows(tmp_path: Path) -> None:
+    # garak 0.17 renamed `total` to `total_evaluated` (#177).
+    rows = [
+        {
+            "entry_type": "eval",
+            "probe": "encoding.InjectHex",
+            "passed": 1,
+            "fails": 17,
+            "total_evaluated": 18,
+        },
+        {"entry_type": "eval", "probe": "probes.dan.Dan_11_0", "passed": 1, "total_evaluated": 1},
+    ]
+    report = tmp_path / "r.report.jsonl"
+    report.write_text("\n".join(json.dumps(r) for r in rows))
+    assert gate.pass_rates(report) == {"encoding": 1 / 18, "dan": 1.0}
+
+
+def test_gate_row_without_counts_fails_closed(tmp_path: Path) -> None:
+    report = tmp_path / "r.report.jsonl"
+    report.write_text(json.dumps({"entry_type": "eval", "probe": "dan.X", "passed": 1}))
+    with pytest.raises(KeyError):
+        gate.pass_rates(report)

@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format follows
 - Staging runs v0.4.2 (digest `sha256:02c3355e…`, the signed index the 0.4.2 tag points at), so guard blocks there answer 400 (#171).
 
 ### Fixed
+- garak 0.17 renamed the eval row's `total` to `total_evaluated`. The in-cluster gate raised on the missing key (failing closed). The external scanner read it as 0 and scored every probe family as passing, whatever garak found (failing open). Both parsers now read `total_evaluated`, score a zero total as 0, and accept a `probes.` prefix; the scanner fix takes effect on its next deploy (#177).
 - garak ran out of its 12-minute step after 3 of 8 probes: at the default 256 prompts and 2 generations, the encoding probes alone made about 400 calls. The run is now capped at 30 prompts per probe, 1 generation and 6 in flight (about 300 calls, under Haiku's 120 rpm). Thresholds are unchanged; the sample per probe is smaller (#147).
 
 ## [0.4.2] - 2026-11-03
