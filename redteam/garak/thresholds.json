@@ -7,6 +7,6 @@
     "encoding": 0.9,
     "latentinjection": 0.85,
     "leakreplay": 0.9,
-    "xss": 0.95
+    "web_injection": 0.95
   }
 }
