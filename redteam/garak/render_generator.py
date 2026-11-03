@@ -1,4 +1,8 @@
-"""Write garak's OpenAICompatible generator options from environment variables (stdout)."""
+"""Write garak's OpenAICompatible generator options from environment variables (stdout).
+
+The model is not an option here: garak sends the target name (``--target_name``) as the
+request's model and ignores a ``model`` key, so the workflow passes it on the command line.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +21,6 @@ def main() -> int:
         "openai": {
             "OpenAICompatible": {
                 "uri": f"{url}/v1",
-                "model": model,
                 "max_tokens": 256,
                 "suppressed_params": ["n", "frequency_penalty", "presence_penalty"],
             }
