@@ -497,3 +497,19 @@ def test_promptfoo_file_references_resolve_from_the_config_dir() -> None:
     assert refs
     missing = [r for r in refs if not (base / r).is_file()]
     assert not missing, missing
+
+
+def test_describe_access_token_reports_names_and_membership_only() -> None:
+    claims = {"sub": "svc-x", "groups": ["g-other", "g-redteam"]}
+    out = get_token.describe_access_token(_jwt(claims), {})
+    assert out == "access token claims [groups, sub]; 2 groups"
+    assert "svc-x" not in out and "g-other" not in out
+    found = get_token.describe_access_token(_jwt(claims), {"AEGIS_RT_EXPECTED_GROUP": "g-redteam"})
+    assert found.endswith("2 groups, expected group present")
+    absent = get_token.describe_access_token(
+        _jwt({"groups": "g-other"}), {"AEGIS_RT_EXPECTED_GROUP": "g"}
+    )
+    assert absent.endswith("1 groups, expected group ABSENT")
+    missing = get_token.describe_access_token(_jwt({"sub": "svc-x"}), {})
+    assert missing.endswith("groups claim missing")
+    assert get_token.describe_access_token("opaque", {}) == "access token is not a readable JWT"

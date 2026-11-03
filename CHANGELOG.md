@@ -39,6 +39,7 @@ All notable changes to this project are documented here. The format follows
   Allocated budgets now total $125 of the $180 gateway cap.
 
 ### Fixed
+- After minting, the red-team job reports the access token's claim names and group count, never a value, to triage the gateway's `no_team` refusal (#147).
 - promptfoo data-leak cases now get their planted values from a `transformVars` hook declared in `defaultTest`. promptfoo inlines `file://` strings inside test files and doesn't support a `:function` suffix for variables, so neither earlier form loaded. Verified locally with promptfoo 0.124.1 and its echo provider: all 15 cases load, and the data-leak checks evaluate real generated values (#147).
 - promptfoo data-leak cases pointed at `../generators/planted.js`, but promptfoo resolves `file://` paths from the config directory, so the suite stopped before sending a request. Paths fixed, plus a test that every `file://` reference resolves (#147).
 - Red-team token errors now name the failing step (GitHub OIDC or identity provider) and the OAuth error code when it has the standard shape. When the identity provider refuses the federated assertion, the job prints the shape of its `sub` (key names, and whether each value matches the expected repository, ref and environment), never a value (#147).
