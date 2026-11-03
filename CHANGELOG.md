@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-03
+
 ### Added
 - ADR 0021, delivery spine and one-pane console (#107, #108): one hub id per change (the gate's
   request id) with every other id joined by `spine.link` events and kept as log fields, never
