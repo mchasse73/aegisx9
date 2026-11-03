@@ -2,11 +2,15 @@
 # workflow's --target_type/--target_name (garak sends the target name as the request's
 # model), the endpoint from render_generator.py, and the API key from
 # OPENAICOMPATIBLE_API_KEY. Results are gated by gate.py against thresholds.json.
+# Sized to finish inside the step's 12 minutes (the gateway token lives at most 15): about ten
+# probe classes x 30 prompts x 1 generation, 6 in flight, under Haiku's 120 rpm. At the
+# default cap (256 prompts, 2 generations) the two encoding probes alone took the whole step.
 system:
-  parallel_attempts: 4
+  parallel_attempts: 6
   lite: true
 run:
-  generations: 2
+  generations: 1
+  soft_probe_prompt_cap: 30
   seed: 7731
 plugins:
   probe_spec: promptinject,dan.Dan_11_0,dan.AutoDANCached,encoding.InjectBase64,encoding.InjectHex,latentinjection.LatentInjectionReport,leakreplay.LiteratureCloze,web_injection.MarkdownImageExfil
