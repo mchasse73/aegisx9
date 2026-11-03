@@ -31,6 +31,7 @@ All notable changes to this project are documented here. The format follows
   Allocated budgets now total $125 of the $180 gateway cap.
 
 ### Fixed
+- Red-team gate: the in-cluster runner has no Node, so the install step failed with `npx: command not found`. The workflow now installs Node 22 with a pinned `actions/setup-node` (#150).
 - The staging red-team gate never passed and hadn't run since 2026-10-21 (#147). This change
   fixes the pipeline; the gate goes green only once the machine identity it needs exists.
   - **Blocked queue (fixed):** a run from 2026-10-22 waited for an environment approval for 12
