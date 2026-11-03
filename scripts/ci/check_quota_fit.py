@@ -4,7 +4,8 @@ A rolling update runs ``replicas + maxSurge`` pods of each Deployment at once, a
 budget Job and CronJobs may run at the same time. Kubernetes refuses any pod that would
 push the namespace past its ResourceQuota, so an oversized change merges cleanly and then
 never starts (#162). This sums the worst case from the rendered manifests: every
-Deployment at full surge plus the ``--concurrent-jobs`` largest Job or CronJob pods.
+Deployment at full surge plus the ``--concurrent-jobs`` largest Job or CronJob pods
+(counting a Job's parallel pods, and taking the largest separately for CPU and memory).
 
 Usage: check_quota_fit.py RENDERED.yaml --limits-cpu 3 --limits-memory 3Gi --pods 5
 Exits 0 when it fits, 1 when it doesn't, 2 on bad input.
@@ -79,10 +80,17 @@ def worst_case(docs: list[dict[str, Any]], concurrent_jobs: int) -> tuple[int, i
             cpu, mem, pods = cpu + n * c, mem + n * m, pods + n
         elif kind in ("Job", "CronJob"):
             spec = d["spec"]["jobTemplate"]["spec"] if kind == "CronJob" else d["spec"]
-            jobs.append(pod_limits(spec["template"]["spec"]))
-    jobs.sort(reverse=True)
-    for c, m in jobs[:concurrent_jobs]:
-        cpu, mem, pods = cpu + c, mem + m, pods + 1
+            # A Job runs up to `parallelism` pods at once (default 1), never more than
+            # `completions` when that is set.
+            copies = int(spec.get("parallelism", 1))
+            if spec.get("completions") is not None:
+                copies = min(copies, int(spec["completions"]))
+            jobs.extend([pod_limits(spec["template"]["spec"])] * max(copies, 0))
+    # CPU and memory are each charged their own worst case: the jobs that peak on CPU need
+    # not be the ones that peak on memory.
+    cpu += sum(sorted((c for c, _ in jobs), reverse=True)[:concurrent_jobs])
+    mem += sum(sorted((m for _, m in jobs), reverse=True)[:concurrent_jobs])
+    pods += min(len(jobs), concurrent_jobs)
     return cpu, mem, pods
 
 

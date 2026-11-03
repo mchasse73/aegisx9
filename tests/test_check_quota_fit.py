@@ -30,9 +30,19 @@ def _deploy(containers: list[dict], surge: object = 1, replicas: int = 1) -> dic
     }
 
 
-def _cron(cpu: str) -> dict:
-    pod = {"containers": [_c("job", cpu, "128Mi")]}
+def _cron(cpu: str, mem: str = "128Mi") -> dict:
+    pod = {"containers": [_c("job", cpu, mem)]}
     return {"kind": "CronJob", "spec": {"jobTemplate": {"spec": {"template": {"spec": pod}}}}}
+
+
+def _job(cpu: str, parallelism: int, completions: int | None = None) -> dict:
+    spec: dict = {
+        "parallelism": parallelism,
+        "template": {"spec": {"containers": [_c("j", cpu, "64Mi")]}},
+    }
+    if completions is not None:
+        spec["completions"] = completions
+    return {"kind": "Job", "spec": spec}
 
 
 def test_units() -> None:
@@ -91,3 +101,18 @@ def test_main_bad_input(tmp_path: Path) -> None:
     f = tmp_path / "r.yaml"
     f.write_text("kind: Deployment\nspec: {}\n", encoding="utf-8")
     assert qf.main([str(f), "--limits-cpu", "1", "--limits-memory", "1Gi", "--pods", "1"]) == 2
+
+
+def test_memory_worst_case_is_independent_of_cpu() -> None:
+    # Copilot's example on #163: the CPU-largest jobs are not the memory-largest ones.
+    docs = [_cron("200m"), _cron("200m"), _cron("100m", "512Mi")]
+    cpu, mem, pods = qf.worst_case(docs, 2)
+    assert cpu == 400
+    assert mem == (512 + 128) * 2**20
+    assert pods == 2
+
+
+@pytest.mark.parametrize(("parallelism", "completions", "cpu"), [(2, None, 600), (3, 1, 300)])
+def test_job_parallelism(parallelism: int, completions: int | None, cpu: int) -> None:
+    got, _, _ = qf.worst_case([_job("300m", parallelism, completions)], 2)
+    assert got == cpu
