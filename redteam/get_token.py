@@ -26,9 +26,11 @@ Inputs (environment): ``AEGIS_RT_TOKEN_URL``, ``AEGIS_RT_CLIENT_ID``,
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -43,12 +45,54 @@ MIN_LIFETIME_S = 780
 OUTPUT_VAR = "AEGIS_REDTEAM_KEY"
 ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 MAX_RESPONSE_BYTES = 1 << 20
+# RFC 6749 section 5.2 error codes are short lowercase words; anything else (a description, a
+# body that echoes input) is never printed.
+OAUTH_ERROR_RE = re.compile(r"^[a-z_]{1,40}$")
 
 Fetch = Callable[[urllib.request.Request], Mapping[str, Any]]
 
 
 class TokenError(Exception):
     """A step failed; the message is fixed text, never a token or a response body."""
+
+
+def oauth_error_code(body: bytes) -> str | None:
+    """The ``error`` code of an OAuth error answer, only if it has the standard shape."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return None
+    code = data.get("error") if isinstance(data, dict) else None
+    return code if isinstance(code, str) and OAUTH_ERROR_RE.match(code) else None
+
+
+def describe_assertion(assertion: str, env: Mapping[str, str]) -> str:
+    """The shape of the assertion's ``sub``, for triage when the identity provider refuses it.
+
+    Prints only key names and whether each value equals the expected one (repository, ref,
+    ``AEGIS_RT_EXPECTED_ENVIRONMENT``), never a value. The payload is decoded without
+    verifying the signature: it is read for diagnosis only, never trusted.
+    """
+    try:
+        payload = assertion.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        parts = str(claims.get("sub", "")).split(":")
+    except (IndexError, ValueError, AttributeError):
+        return "assertion is not a readable JWT"
+    expected = {
+        "repo": env.get("GITHUB_REPOSITORY", ""),
+        "environment": env.get("AEGIS_RT_EXPECTED_ENVIRONMENT", "redteam"),
+        "ref": env.get("GITHUB_REF", ""),
+    }
+    shape = []
+    for i in range(0, len(parts) - 1, 2):
+        key, value = parts[i], parts[i + 1]
+        want = expected.get(key)
+        mark = "?" if not want else ("=" if value == want else "!=")
+        shape.append(f"{key}{mark}")
+    if len(parts) % 2:
+        shape.append("<odd>")
+    return "assertion sub shape " + ":".join(shape) + " (= expected, != differs, ? unchecked)"
 
 
 def _fetch_json(request: urllib.request.Request) -> Mapping[str, Any]:
@@ -58,7 +102,12 @@ def _fetch_json(request: urllib.request.Request) -> Mapping[str, Any]:
         with urllib.request.urlopen(request, timeout=20) as resp:  # noqa: S310 - https only
             body = resp.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as e:
-        raise TokenError(f"endpoint answered {e.code}") from None
+        try:
+            code = oauth_error_code(e.read(4096))
+        except Exception:  # best effort: a broken error body must not hide the status
+            code = None
+        suffix = f" ({code})" if code else ""
+        raise TokenError(f"endpoint answered {e.code}{suffix}") from None
     if len(body) > MAX_RESPONSE_BYTES:
         raise TokenError("response too large")
     data = json.loads(body)
@@ -76,7 +125,12 @@ def github_oidc_token(env: Mapping[str, str], audience: str, fetch: Fetch) -> st
         url + sep + urllib.parse.urlencode({"audience": audience}),
         headers={"Authorization": "Bearer " + bearer, "Accept": "application/json"},
     )
-    value = fetch(req).get("value")
+    try:
+        value = fetch(req).get("value")
+    except TokenError as e:
+        raise TokenError(f"GitHub OIDC token: {e}") from None
+    except Exception as e:  # transport or decoding: the type only, never the message
+        raise TokenError(f"GitHub OIDC token: failed ({type(e).__name__})") from None
     if not isinstance(value, str) or not value:
         raise TokenError("GitHub OIDC answer has no token")
     return value
@@ -119,7 +173,15 @@ def request_token(env: Mapping[str, str], fetch: Fetch = _fetch_json) -> tuple[s
         method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
     )
-    data = fetch(req)
+    try:
+        data = fetch(req)
+    except TokenError as e:
+        detail = ""
+        if "client_assertion" in form:
+            detail = "; " + describe_assertion(form["client_assertion"], env)
+        raise TokenError(f"identity provider token request: {e}{detail}") from None
+    except Exception as e:  # transport or decoding: the type only, never the message
+        raise TokenError(f"identity provider token request: failed ({type(e).__name__})") from None
     token = data.get("access_token")
     if not isinstance(token, str) or not token:
         raise TokenError("token response has no access token")

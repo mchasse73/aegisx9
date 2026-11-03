@@ -1,3 +1,4 @@
+import base64
 import datetime as dt
 import http.client
 import importlib.util
@@ -388,3 +389,98 @@ def test_freshness_unreadable_history() -> None:
 
     assert freshness.main(FRESH_ARGS, FRESH_ENV, broken, NOW) == 2
     assert freshness.main(FRESH_ARGS, {}, None, NOW) == 2
+
+
+@pytest.mark.parametrize(
+    ("body", "code"),
+    [
+        (b'{"error": "invalid_grant", "error_description": "details"}', "invalid_grant"),
+        (b'{"error": "Not A Code!"}', None),
+        (b'{"error": 5}', None),
+        (b"<html>bad gateway</html>", None),
+        (b"[]", None),
+    ],
+)
+def test_oauth_error_code_only_standard_shape(body: bytes, code: str | None) -> None:
+    assert get_token.oauth_error_code(body) == code
+
+
+def test_token_request_error_names_the_step() -> None:
+    def fetch(req: urllib.request.Request) -> dict:  # type: ignore[type-arg]
+        if "audience=" in req.full_url:
+            return {"value": secrets.token_urlsafe(16)}
+        raise get_token.TokenError("endpoint answered 400 (invalid_grant)")
+
+    with pytest.raises(
+        get_token.TokenError, match=r"^identity provider token request: .*invalid_grant"
+    ):
+        get_token.request_token(_token_env(), fetch)
+
+
+def test_github_oidc_error_names_the_step() -> None:
+    def fetch(_req: urllib.request.Request) -> dict:  # type: ignore[type-arg]
+        raise get_token.TokenError("endpoint answered 403")
+
+    with pytest.raises(get_token.TokenError, match=r"^GitHub OIDC token: endpoint answered 403"):
+        get_token.request_token(_token_env(), fetch)
+
+
+def _jwt(claims: dict) -> str:  # type: ignore[type-arg]
+    def enc(d: dict) -> str:  # type: ignore[type-arg]
+        return base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+
+    return f"{enc({'alg': 'none'})}.{enc(claims)}.{secrets.token_urlsafe(8)}"
+
+
+def test_describe_assertion_prints_shape_not_values() -> None:
+    env = {"GITHUB_REPOSITORY": "o/r", "GITHUB_REF": "refs/heads/main"}
+    out = get_token.describe_assertion(_jwt({"sub": "repo:o/r:environment:other"}), env)
+    assert out.startswith("assertion sub shape repo=:environment!=")
+    assert "o/r" not in out and "other" not in out
+    ref = get_token.describe_assertion(_jwt({"sub": "repo:o/r:ref:refs/heads/main"}), env)
+    assert "repo=:ref=" in ref
+    assert get_token.describe_assertion("not-a-jwt", env) == "assertion is not a readable JWT"
+
+
+def test_refused_assertion_reports_its_shape() -> None:
+    env = _token_env(GITHUB_REPOSITORY="o/r")
+
+    def fetch(req: urllib.request.Request) -> dict:  # type: ignore[type-arg]
+        if "audience=" in req.full_url:
+            return {"value": _jwt({"sub": "repo:o/r:environment:redteam"})}
+        raise get_token.TokenError("endpoint answered 400 (invalid_grant)")
+
+    with pytest.raises(get_token.TokenError, match=r"sub shape repo=:environment="):
+        get_token.request_token(env, fetch)
+
+
+@pytest.mark.parametrize(
+    ("fail_on", "prefix"),
+    [("audience=", "GitHub OIDC token"), ("token/", "identity provider token request")],
+)
+def test_transport_errors_name_the_step(fail_on: str, prefix: str) -> None:
+    def fetch(req: urllib.request.Request) -> dict:  # type: ignore[type-arg]
+        if fail_on in req.full_url:
+            raise ConnectionResetError("details that must not be printed")
+        return {"value": secrets.token_urlsafe(16)}
+
+    with pytest.raises(get_token.TokenError) as err:
+        get_token.request_token(_token_env(), fetch)
+    assert str(err.value) == f"{prefix}: failed (ConnectionResetError)"
+
+
+def test_broken_error_body_keeps_the_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    import http.client
+    import io
+
+    class Broken(io.BytesIO):
+        def read(self, *_a: object) -> bytes:
+            raise http.client.IncompleteRead(b"")
+
+    def urlopen(*_a: object, **_k: object) -> None:
+        raise urllib.error.HTTPError("https://idp.example.com/t", 400, "Bad", {}, Broken())  # type: ignore[arg-type]
+
+    monkeypatch.setattr(get_token.urllib.request, "urlopen", urlopen)
+    req = urllib.request.Request("https://idp.example.com/t")
+    with pytest.raises(get_token.TokenError, match=r"^endpoint answered 400$"):
+        get_token._fetch_json(req)
