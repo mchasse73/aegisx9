@@ -513,3 +513,5 @@ def test_describe_access_token_reports_names_and_membership_only() -> None:
     missing = get_token.describe_access_token(_jwt({"sub": "svc-x"}), {})
     assert missing.endswith("groups claim missing")
     assert get_token.describe_access_token("opaque", {}) == "access token is not a readable JWT"
+    as_list = "e30." + base64.urlsafe_b64encode(b"[1]").decode().rstrip("=") + ".x"
+    assert get_token.describe_access_token(as_list, {}) == "access token is not a readable JWT"

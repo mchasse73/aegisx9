@@ -106,6 +106,8 @@ def describe_access_token(token: str, env: Mapping[str, str]) -> str:
     try:
         payload = token.split(".")[1]
         claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        if not isinstance(claims, dict):
+            raise ValueError("payload is not an object")
         keys = sorted(str(k) for k in claims)
     except (IndexError, ValueError, AttributeError, TypeError):
         return "access token is not a readable JWT"
