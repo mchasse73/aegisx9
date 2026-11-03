@@ -13,6 +13,7 @@ Exits 0 once rolled out, 1 on timeout, 2 on bad input or a refused request.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -128,7 +129,8 @@ def wait(
             if e.status in FATAL_STATUSES:
                 raise
             items = []
-        except (OSError, ValueError):
+        except (OSError, ValueError, http.client.HTTPException):
+            # Resets, timeouts, bad JSON and truncated bodies (IncompleteRead) are transient.
             items = []
         if items and all(rollout_complete(d, digest) for d in items):
             return True
@@ -152,7 +154,7 @@ def main(argv: list[str] | None = None, fetch: Fetch | None = None) -> int:
             else digest_from_file(args.digest_file)
         )
         done = wait(fetch or in_cluster_fetch(), args.namespace, digest, args.timeout)
-    except (RolloutError, OSError, ValueError) as e:
+    except (RolloutError, OSError, ValueError, http.client.HTTPException) as e:
         detail = str(e) if isinstance(e, RolloutError) else type(e).__name__
         print(f"wait_for_rollout: {detail}", file=sys.stderr)
         return 2

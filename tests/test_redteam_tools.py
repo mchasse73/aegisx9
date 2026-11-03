@@ -1,4 +1,5 @@
 import datetime as dt
+import http.client
 import importlib.util
 import json
 import secrets
@@ -126,6 +127,7 @@ def test_wait_retries_transient_errors() -> None:
         rollout.RolloutError("API answered 503", 503),
         TimeoutError(),
         ValueError("bad json"),
+        http.client.IncompleteRead(b"{", 10),
         {"items": [_deploy(digest)]},
     ]
 
