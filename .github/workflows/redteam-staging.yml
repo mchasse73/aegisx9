@@ -63,6 +63,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+      # The ARC runner image ships without Node (#150); promptfoo runs through npx.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
       # Third-party tools are fetched before any token exists, and every step that runs them
       # unsets GitHub's OIDC request variables, so a compromised dependency can neither read
       # the identity-provider settings nor mint its own assertion.
