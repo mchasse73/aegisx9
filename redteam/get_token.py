@@ -95,6 +95,35 @@ def describe_assertion(assertion: str, env: Mapping[str, str]) -> str:
     return "assertion sub shape " + ":".join(shape) + " (= expected, != differs, ? unchecked)"
 
 
+def describe_access_token(token: str, env: Mapping[str, str]) -> str:
+    """Claim names of the minted access token, its group count, and (when
+    ``AEGIS_RT_EXPECTED_GROUP`` is set) whether ``groups`` holds that group.
+
+    The gateway maps the groups claim to a team; a token without it is refused (``no_team``).
+    Prints only claim names, a count and a yes/no, never a value. Decoded unverified, for
+    diagnosis only (the gateway verifies it).
+    """
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        if not isinstance(claims, dict):
+            raise ValueError("payload is not an object")
+        keys = sorted(str(k) for k in claims)
+    except (IndexError, ValueError, AttributeError, TypeError):
+        return "access token is not a readable JWT"
+    want = env.get("AEGIS_RT_EXPECTED_GROUP", "")
+    groups = claims.get("groups")
+    if isinstance(groups, str):
+        groups = [groups]
+    if not isinstance(groups, list):
+        held = "groups claim missing"
+    else:
+        held = f"{len(groups)} groups"
+        if want:
+            held += f", expected group {'present' if want in groups else 'ABSENT'}"
+    return f"access token claims [{', '.join(keys)}]; {held}"
+
+
 def _fetch_json(request: urllib.request.Request) -> Mapping[str, Any]:
     if urllib.parse.urlsplit(request.full_url).scheme != "https":
         raise TokenError("only https endpoints are allowed")
@@ -217,6 +246,7 @@ def main(env: Mapping[str, str] | None = None, fetch: Fetch = _fetch_json) -> in
         print(f"get_token: failed ({type(e).__name__})", file=sys.stderr)
         return 1
     print(f"get_token: gateway token ready (valid {lifetime} s)", file=sys.stderr)
+    print(f"get_token: {describe_access_token(token, env)}", file=sys.stderr)
     return 0
 
 
