@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- `.gitignore` now ignores credential drop files (`.jira*`), so a vendor token placed in
+  the repo directory can't be staged by accident (#143).
 - ADR 0012 wording (#108, #109): keys that always report a signature counter of 0 are
   accepted as counter-less, a non-zero counter that does not increase is refused and alerts,
   and the counter is checked only after the signature verifies. The approver principal is

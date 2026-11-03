@@ -38,6 +38,7 @@ evidence/
 
 # Never keep credentials in the tree (2026-10-21: a token file landed here once)
 .git_*
+.jira*
 *secret*
 !**/secrets.py
 # Kubernetes ExternalSecret manifests reference the store; they carry no values.
