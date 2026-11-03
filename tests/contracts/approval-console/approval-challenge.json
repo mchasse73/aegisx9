@@ -1,0 +1,381 @@
+{
+  "endpoint": {
+    "method": "POST",
+    "path": "/jobs/approval-challenge"
+  },
+  "roles": [
+    "approver",
+    "operator"
+  ],
+  "description": "Issue a single-use statement v2 (random 128-bit nonce, expiry) for submitted jobs. An approver also gets the WebAuthn request parameters: challenge = base64url(sha256(statement)), RP ID, its active credentials.",
+  "request": {
+    "body_schema": {
+      "type": "object",
+      "required": [
+        "job_ids"
+      ],
+      "properties": {
+        "job_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "pattern": "^REQ-\\d{8}-\\d{3}$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "example": {
+      "job_ids": [
+        "REQ-20261103-001"
+      ]
+    }
+  },
+  "responses": [
+    {
+      "name": "issued_approver",
+      "status": 200,
+      "when": "approver bearer, every job submitted, WebAuthn configured",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "nonce",
+          "expires",
+          "statement",
+          "requester",
+          "policy",
+          "tier",
+          "threshold",
+          "jobs",
+          "webauthn"
+        ],
+        "properties": {
+          "nonce": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "expires": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+          },
+          "statement": {
+            "type": "string",
+            "pattern": "^x9-build-approval v2\n",
+            "maxLength": 20000
+          },
+          "requester": {
+            "type": "string",
+            "minLength": 1
+          },
+          "policy": {
+            "type": "object",
+            "required": [
+              "version",
+              "tier",
+              "threshold",
+              "group"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "tier": {
+                "type": "string",
+                "pattern": "^T[0-4]$"
+              },
+              "threshold": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "group": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "tier": {
+            "type": "string",
+            "pattern": "^T[0-4]$"
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "jobs": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^REQ-\\d{8}-\\d{3}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "webauthn": {
+            "type": "object",
+            "required": [
+              "challenge",
+              "rp_id",
+              "user_verification",
+              "allow_credentials"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "challenge": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "rp_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "user_verification": {
+                "type": "string",
+                "const": "required"
+              },
+              "allow_credentials": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "id"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "public-key"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]+$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "nonce": "3f9c2a7e5b1d4c8a9e6f0b2d7a4c1e8f",
+        "expires": "2026-11-03T12:15:00Z",
+        "statement": "x9-build-approval v2\ndate: 2026-11-03\ndecision: approve\nnonce: 3f9c2a7e5b1d4c8a9e6f0b2d7a4c1e8f\nexpires: 2026-11-03T12:15:00Z\nrequester: requester-agent\npolicy: sha256:396feacff4f0cc244215374644c26e6e0bd264929e6d38807135c00d4570f8b1 tier=T4 threshold=1 group=owner\njob: REQ-20261103-001 sha256:131f050bd5e4be49457389df9bee7575ed5c22a5e1c1071df21f0c8e516089cb\n",
+        "requester": "requester-agent",
+        "policy": {
+          "version": "sha256:396feacff4f0cc244215374644c26e6e0bd264929e6d38807135c00d4570f8b1",
+          "tier": "T4",
+          "threshold": 1,
+          "group": "owner"
+        },
+        "tier": "T4",
+        "threshold": 1,
+        "jobs": {
+          "REQ-20261103-001": "131f050bd5e4be49457389df9bee7575ed5c22a5e1c1071df21f0c8e516089cb"
+        },
+        "webauthn": {
+          "challenge": "N4HRwraBB04vpT4rH-hAJjeNMzfLCYDOgdYemAr7yrc",
+          "rp_id": "console.example.com",
+          "user_verification": "required",
+          "allow_credentials": [
+            {
+              "type": "public-key",
+              "id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE"
+            }
+          ]
+        }
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "issued_operator",
+      "status": 200,
+      "when": "operator gate token (or an approver while WebAuthn is not configured): no webauthn block",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "nonce",
+          "expires",
+          "statement",
+          "requester",
+          "policy",
+          "tier",
+          "threshold",
+          "jobs"
+        ],
+        "properties": {
+          "nonce": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "expires": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+          },
+          "statement": {
+            "type": "string",
+            "pattern": "^x9-build-approval v2\n",
+            "maxLength": 20000
+          },
+          "requester": {
+            "type": "string",
+            "minLength": 1
+          },
+          "policy": {
+            "type": "object",
+            "required": [
+              "version",
+              "tier",
+              "threshold",
+              "group"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "tier": {
+                "type": "string",
+                "pattern": "^T[0-4]$"
+              },
+              "threshold": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "group": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "tier": {
+            "type": "string",
+            "pattern": "^T[0-4]$"
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "jobs": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^REQ-\\d{8}-\\d{3}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "nonce": "3f9c2a7e5b1d4c8a9e6f0b2d7a4c1e8f",
+        "expires": "2026-11-03T12:15:00Z",
+        "statement": "x9-build-approval v2\ndate: 2026-11-03\ndecision: approve\nnonce: 3f9c2a7e5b1d4c8a9e6f0b2d7a4c1e8f\nexpires: 2026-11-03T12:15:00Z\nrequester: requester-agent\npolicy: sha256:396feacff4f0cc244215374644c26e6e0bd264929e6d38807135c00d4570f8b1 tier=T4 threshold=1 group=owner\njob: REQ-20261103-001 sha256:131f050bd5e4be49457389df9bee7575ed5c22a5e1c1071df21f0c8e516089cb\n",
+        "requester": "requester-agent",
+        "policy": {
+          "version": "sha256:396feacff4f0cc244215374644c26e6e0bd264929e6d38807135c00d4570f8b1",
+          "tier": "T4",
+          "threshold": 1,
+          "group": "owner"
+        },
+        "tier": "T4",
+        "threshold": 1,
+        "jobs": {
+          "REQ-20261103-001": "131f050bd5e4be49457389df9bee7575ed5c22a5e1c1071df21f0c8e516089cb"
+        }
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "bad_job_ids",
+      "status": 400,
+      "when": "job_ids missing, empty, over 50, duplicated or not REQ-YYYYMMDD-NNN",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^job_ids: "
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "job_ids: 1-50 distinct REQ-YYYYMMDD-NNN ids"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "not_submitted",
+      "status": 409,
+      "when": "a job is unknown or not in state submitted (value: 'not found' or 'state is <state>')",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "jobs"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "const": "only submitted jobs can be signed"
+          },
+          "jobs": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^REQ-\\d{8}-\\d{3}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "only submitted jobs can be signed",
+        "jobs": {
+          "REQ-20261103-002": "not found"
+        }
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "not_operator",
+      "status": 403,
+      "when": "a project (non-operator) gate token",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "const": "operator only (or the approval console)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "operator only (or the approval console)"
+      }
+    }
+  ]
+}

@@ -1,0 +1,431 @@
+{
+  "endpoint": {
+    "method": "POST",
+    "path": "/jobs/webauthn/register"
+  },
+  "roles": [
+    "approver"
+  ],
+  "description": "Verify a navigator.credentials.create() result and store it active. The browser's PublicKeyCredential toJSON() form goes INSIDE {\"credential\": ...}; a bare toJSON() body is refused (code malformed).",
+  "request": {
+    "body_schema": {
+      "type": "object",
+      "required": [
+        "credential"
+      ],
+      "properties": {
+        "credential": {
+          "type": "object",
+          "required": [
+            "id",
+            "rawId",
+            "type",
+            "response"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "rawId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "type": {
+              "type": "string",
+              "const": "public-key"
+            },
+            "response": {
+              "type": "object",
+              "required": [
+                "clientDataJSON",
+                "attestationObject"
+              ],
+              "properties": {
+                "clientDataJSON": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]+$"
+                },
+                "attestationObject": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]+$"
+                },
+                "transports": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "authenticatorData": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]+$"
+                },
+                "publicKey": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]+$"
+                },
+                "publicKeyAlgorithm": {
+                  "type": "integer"
+                }
+              },
+              "additionalProperties": false
+            },
+            "authenticatorAttachment": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "clientExtensionResults": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "example": {
+      "credential": {
+        "id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+        "rawId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+        "type": "public-key",
+        "response": {
+          "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiTlByUjg0QUJSOUJWSUdBd2JyWEJZY2ExdnpMa0NXVl9xWnRqYm91TVA3MCIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5leGFtcGxlLmNvbSIsImNyb3NzT3JpZ2luIjpmYWxzZX0",
+          "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YQAAAAAAAAAAAAAAAAAAAAA",
+          "transports": [
+            "usb",
+            "nfc"
+          ]
+        },
+        "authenticatorAttachment": "cross-platform",
+        "clientExtensionResults": {}
+      }
+    }
+  },
+  "responses": [
+    {
+      "name": "registered",
+      "status": 201,
+      "when": "fresh login, the registration verifies, device-bound key: stored active and the owner is alerted",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "credential",
+          "state",
+          "aaguid"
+        ],
+        "properties": {
+          "credential": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$"
+          },
+          "state": {
+            "type": "string",
+            "const": "active"
+          },
+          "aaguid": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "credential": "0000000000000001",
+        "state": "active",
+        "aaguid": "00000000-0000-0000-0000-000000000001"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "fresh_login_required",
+      "status": 403,
+      "when": "the bearer's auth_time AND iat are both older than the fresh-login window (default 300 s)",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "const": "sign in again to register a key"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "sign in again to register a key"
+      },
+      "console_action": "fresh_login"
+    },
+    {
+      "name": "not_console",
+      "status": 403,
+      "when": "any gate token (operator included): console only",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "const": "the approval console (approver) only"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "the approval console (approver) only"
+      }
+    },
+    {
+      "name": "not_configured",
+      "status": 503,
+      "when": "the gate has no RP ID or origin configured (WebAuthn off)",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^WebAuthn is not configured"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "WebAuthn is not configured on this server (WEBAUTHN_RP_ID, WEBAUTHN_ORIGIN)"
+      },
+      "console_action": "bad_gateway"
+    },
+    {
+      "name": "refused_malformed",
+      "status": 403,
+      "when": "the body has no 'credential' object (e.g. the bare toJSON() was sent), or a field is not base64url, or clientDataJSON does not parse",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^registration refused: "
+          },
+          "code": {
+            "type": "string",
+            "const": "malformed"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "registration refused: credential (PublicKeyCredential JSON) required",
+        "code": "malformed"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_challenge",
+      "status": 403,
+      "when": "the challenge in clientDataJSON was never issued, was already used, or was issued for an approval",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^registration refused: "
+          },
+          "code": {
+            "type": "string",
+            "const": "challenge"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "registration refused: unknown or already used registration challenge (ask for new options)",
+        "code": "challenge"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_principal",
+      "status": 403,
+      "when": "the registration challenge was issued to a different signed-in user",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^registration refused: "
+          },
+          "code": {
+            "type": "string",
+            "const": "principal"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "registration refused: registration challenge was issued to another user",
+        "code": "principal"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_expired",
+      "status": 403,
+      "when": "the registration challenge is older than 5 minutes",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^registration refused: "
+          },
+          "code": {
+            "type": "string",
+            "const": "expired"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "registration refused: registration challenge expired (ask for new options)",
+        "code": "expired"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_origin",
+      "status": 403,
+      "when": "clientDataJSON.crossOrigin is true",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^registration refused: "
+          },
+          "code": {
+            "type": "string",
+            "const": "origin"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "registration refused: cross-origin registration refused",
+        "code": "origin"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_verify",
+      "status": 403,
+      "when": "the registration does not verify: wrong origin, wrong RP ID hash, UV or UP flag missing, wrong type, bad attestation",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^registration refused: "
+          },
+          "code": {
+            "type": "string",
+            "const": "verify"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "registration refused: registration does not verify: Unexpected client data origin",
+        "code": "verify"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "refused_synced",
+      "status": 403,
+      "when": "the authenticator data has backupEligible or backupState set (synced passkey): device-bound keys only",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^registration refused: "
+          },
+          "code": {
+            "type": "string",
+            "const": "synced"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "registration refused: synced passkey (backup eligible) refused: enrol a device-bound security key",
+        "code": "synced"
+      },
+      "console_action": "relay"
+    },
+    {
+      "name": "duplicate",
+      "status": 409,
+      "when": "this credential id is already in the registry",
+      "body_schema": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "pattern": "^registration refused: "
+          },
+          "code": {
+            "type": "string",
+            "const": "duplicate"
+          }
+        },
+        "additionalProperties": false
+      },
+      "example": {
+        "error": "registration refused: this credential is already registered",
+        "code": "duplicate"
+      },
+      "console_action": "relay"
+    }
+  ]
+}

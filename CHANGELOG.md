@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Approval console contract fixture (`tests/contracts/approval-console/`, #108, #109): one JSON
+  file per console-to-gate endpoint with every success and refusal case, the action the
+  console must take on each, and a stdlib schema checker. It is ported from customer zero's live
+  console and gate, with placeholder credential ids, challenges recomputed from their statements,
+  and the full browser registration response accepted. Both the future console and gate suites will assert against it, so neither side can
+  drift alone. A test checks the fixture against itself, and the README lists the planned product
+  differences.
+
 ### Changed
 - `.gitignore` now ignores credential drop files (`.jira*`), so a vendor token placed in
   the repo directory can't be staged by accident (#143).
