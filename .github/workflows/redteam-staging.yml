@@ -35,6 +35,7 @@ concurrency:
 env:
   PROMPTFOO_VERSION: "0.124.1"
   GARAK_VERSION: "0.17.1"
+  TORCH_VERSION: "2.15.0" # CPU build, see the install step (#184)
 
 jobs:
   redteam:
@@ -70,12 +71,21 @@ jobs:
       # Third-party tools are fetched before any token exists, and every step that runs them
       # unsets GitHub's OIDC request variables, so a compromised dependency can neither read
       # the identity-provider settings nor mint its own assertion.
+      # garak depends on torch. From PyPI that pulls about 2 GB of CUDA wheels, which once took
+      # the whole hour on a slow mirror (#184), and the red-team never uses a GPU. The CPU
+      # build (about 200 MB) is installed first, so pip keeps it when it resolves garak.
       - name: install promptfoo and garak
         shell: bash
+        timeout-minutes: 15
         run: |
           unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
           npx --yes "promptfoo@${PROMPTFOO_VERSION}" --version
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}"
           pip install "garak==${GARAK_VERSION}"
+          if pip list 2>/dev/null | grep -qi '^nvidia-'; then
+            echo "::error::CUDA wheels were installed; the CPU torch pin no longer holds"
+            exit 1
+          fi
       - name: wait for staging to run the pinned digest
         run: >-
           python3 redteam/wait_for_rollout.py --namespace aegisx9-staging
