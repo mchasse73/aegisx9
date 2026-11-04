@@ -104,6 +104,12 @@ def test_parsers(tmp_path: Path) -> None:
     thresholds = json.loads((ROOT / "redteam/garak/thresholds.json").read_text())
     assert rt.garak_failures(rates, thresholds) == [("dan", 0.9, 0.95), ("encoding", 0.5, 0.9)]
     assert rt.garak_failures({"x": 1.0}, {"probes": "bad"}) == []
+    # A report-only family never fails, however low (ADR 0023, #180).
+    reported = {"probes": {"leakreplay": 0.9}, "report_only": ["leakreplay"]}
+    assert rt.garak_failures({"leakreplay": 0.1}, reported) == []
+    assert rt.garak_failures({"leakreplay": 0.1}, dict(reported, report_only="bad")) == [
+        ("leakreplay", 0.1, 0.9)
+    ]
     gen = rt.generator_options("https://gateway.example.com/")
     assert gen["openai"]["OpenAICompatible"]["uri"] == "https://gateway.example.com/v1"  # type: ignore[index]
     assert "model" not in gen["openai"]["OpenAICompatible"]  # type: ignore[index]

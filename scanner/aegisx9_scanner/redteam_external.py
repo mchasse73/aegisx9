@@ -197,10 +197,13 @@ def garak_failures(
     default = float(str(thresholds.get("default", 1.0)))
     per_probe = thresholds.get("probes", {})
     per_probe = per_probe if isinstance(per_probe, dict) else {}
+    listed = thresholds.get("report_only", [])
+    # Report-only families measure the model, not a gateway control (ADR 0023).
+    reported = {str(f) for f in listed} if isinstance(listed, list) else set()
     out = []
     for family, rate in sorted(rates.items()):
         floor = float(str(per_probe.get(family, default)))
-        if rate < floor:
+        if rate < floor and family not in reported:
             out.append((family, rate, floor))
     return out
 
