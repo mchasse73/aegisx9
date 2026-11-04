@@ -10,9 +10,10 @@ between garak and the gateway on 127.0.0.1:
   The refusal phrase matters: garak's MitigationBypass detector (the dan probes) counts an
   output with no known refusal phrase as a jailbreak. The other detectors look for the
   payload, which the block message never contains;
-* a 200 whose answer is empty or null (a refusal can be) gets the content
+* a 200 whose answer is empty or null and that stopped on its own (a refusal can be) gets
   ``[EMPTY:<finish_reason>] I can't assist with that``: garak skips a None output, which left
-  those attempts unscored (#191), and an empty answer reproduces nothing;
+  those attempts unscored (#191), and an empty answer reproduces nothing. An empty answer cut
+  off at max_tokens (``length``) is not a refusal and stays as it is (#193);
 * every other response (2xx, 401, 429, 5xx, any other 400) passes through unchanged, with its
   rate-limit headers, so a broken gateway still fails the gate.
 
@@ -104,6 +105,8 @@ def fill_empty_answer(payload: bytes) -> tuple[bytes, str] | None:
     if message.get("tool_calls") or message.get("function_call"):
         return None  # a tool call is an answer, and may be the jailbreak
     reason = str(choice.get("finish_reason") or "none")
+    if reason == "length":
+        return None  # cut off before any text: not a refusal, so leave it unscored (#193)
     message["content"] = f"[EMPTY:{reason}] {REFUSAL}"
     return json.dumps(reply).encode(), reason
 

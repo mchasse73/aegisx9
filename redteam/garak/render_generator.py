@@ -21,7 +21,7 @@ def main() -> int:
         "openai": {
             "OpenAICompatible": {
                 "uri": f"{url}/v1",
-                "max_tokens": 256,
+                "max_tokens": 1024,  # 256 cut 47 answers off before any text (#193)
                 "suppressed_params": ["n", "frequency_penalty", "presence_penalty"],
             }
         }
