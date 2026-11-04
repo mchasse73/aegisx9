@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Staging runs v0.5.0 (digest `sha256:f6b1ffef…`, the signed index the 0.5.0 tag points at), so the encoded-payload guard is live there (#172).
+
 ## [0.5.0] - 2026-11-03
 
 ### Added
