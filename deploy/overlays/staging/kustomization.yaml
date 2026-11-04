@@ -18,5 +18,5 @@ images:
   - name: ghcr.io/mchasse73/aegisx9
     # v0.5.0: the signed digest from the release workflow for main 35e8b7e (2026-11-03), the
     # same index the 0.5.0 tag points at (tag run verified main's signatures, then re-tagged).
-    # Guard blocks answer 400 invalid_request_error instead of 500 (#171).
+    # Adds the encoded-payload input guard (#172, ADR 0022).
     digest: sha256:f6b1ffefa8d225c3ad173d6792468c6d853d1494594938aa7d8d0e3666706c8f
