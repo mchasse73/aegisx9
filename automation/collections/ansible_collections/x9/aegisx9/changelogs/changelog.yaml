@@ -1,6 +1,13 @@
 ---
 ancestor: null
 releases:
+  0.6.0:
+    changes:
+      trivial:
+        - >-
+          No changes to the collection's roles; version aligned with the AegisX9 release
+          (embedded-instruction and instruction-echo guards, ADR 0024).
+    release_date: "2026-11-04"
   0.5.0:
     changes:
       trivial:
