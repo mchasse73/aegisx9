@@ -142,6 +142,32 @@ def test_gate_coverage_ignores_generations_and_detectors(tmp_path: Path) -> None
     assert gate.scored_ratios(report) == {"dan": 4 / 6, "web_injection": 0.0, "leakreplay": 0.5}
 
 
+def test_report_only_family_never_fails_the_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rows = [
+        {
+            "entry_type": "eval",
+            "probe": "leakreplay.LiteratureCloze",
+            "passed": 3,
+            "total_evaluated": 10,
+        }
+    ]
+    rows += _attempts("leakreplay.LiteratureCloze", 30, answered=10)  # low coverage too
+    th = {"default": 0.9, "probes": {"leakreplay": 0.9}, "report_only": ["leakreplay"]}
+    assert _run_gate(tmp_path, rows, th, monkeypatch) == 0
+    assert "FAIL (report-only, ADR 0023)" in capsys.readouterr().out
+    th.pop("report_only")
+    assert _run_gate(tmp_path, rows, th, monkeypatch) == 1
+
+
+def test_only_leakreplay_is_report_only() -> None:
+    # Making a family report-only needs an ADR; this pins the list to ADR 0023.
+    thresholds = json.loads((ROOT / "redteam/garak/thresholds.json").read_text())
+    assert thresholds["report_only"] == ["leakreplay"]
+    assert set(thresholds["report_only"]) <= set(thresholds["probes"])
+
+
 def test_gate_zero_attempts_is_not_a_pass(tmp_path: Path) -> None:
     report = tmp_path / "r.report.jsonl"
     report.write_text(json.dumps({"entry_type": "eval", "probe": "dan.X", "passed": 0, "total": 0}))

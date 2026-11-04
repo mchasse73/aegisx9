@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- ADR 0023: training-data replay (garak `leakreplay`) is reported, not gated (owner decision, #180). A gateway can't change what a model memorised, and the family sat near 0.30 against its 0.90 floor once scoring was fixed. It still runs and prints against its floor, marked report-only. It no longer fails the gate, the external scanner or the coverage check. Making a family report-only needs an ADR, and a test pins the list. The coverage message now also names answers cut off at `max_tokens`.
+
 ### Changed
 - Staging runs v0.5.0 (digest `sha256:f6b1ffef…`, the signed index the 0.5.0 tag points at), so the encoded-payload guard is live there (#172).
 

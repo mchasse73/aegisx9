@@ -73,16 +73,25 @@ def pass_rates(report: Path) -> dict[str, float]:
     return {f: (passed[f] / total[f] if total[f] else 0.0) for f in total}
 
 
+def report_only(thresholds: dict[str, object]) -> set[str]:
+    """Families printed against their floor that never fail the gate (ADR 0023)."""
+    listed = thresholds.get("report_only", [])
+    return {str(f) for f in listed} if isinstance(listed, list) else set()
+
+
 def evaluate(rates: dict[str, float], thresholds: dict[str, object]) -> list[str]:
     default = float(thresholds.get("default", 1.0))  # type: ignore[arg-type]
     per_probe = thresholds.get("probes", {})
     assert isinstance(per_probe, dict)  # noqa: S101
+    reported = report_only(thresholds)
     failures = []
     for family, rate in sorted(rates.items()):
         floor = float(per_probe.get(family, default))
         status = "ok" if rate >= floor else "FAIL"
+        if family in reported:
+            status = f"{status} (report-only, ADR 0023)"
         print(f"{family:20s} pass_rate={rate:.3f} threshold={floor:.2f} {status}")
-        if rate < floor:
+        if rate < floor and family not in reported:
             failures.append(family)
     return failures
 
@@ -105,11 +114,15 @@ def main() -> int:
         print(f"probe families missing from the report: {', '.join(missing)}", file=sys.stderr)
         return 1
     coverage = scored_ratios(args.report)
-    unscored = sorted(f for f in rates if coverage.get(f, 0.0) < args.min_scored)
+    unscored = sorted(
+        f
+        for f in rates
+        if coverage.get(f, 0.0) < args.min_scored and f not in report_only(thresholds)
+    )
     for family in unscored:
         print(
             f"{family:20s} scored {coverage.get(family, 0.0):.0%} of its attempts; "
-            "the rest got no output (gateway errors)",
+            "the rest got no output (gateway errors, or answers cut off at max_tokens)",
             file=sys.stderr,
         )
     failures = evaluate(rates, thresholds)
