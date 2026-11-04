@@ -15,7 +15,9 @@ from aegisx9.guards.base import Direction, Finding, GuardContext, GuardResult, V
 _PATTERNS: dict[str, re.Pattern[str]] = {
     "instruction_override": re.compile(
         r"\b(ignore|disregard|forget)\b.{0,40}\b(previous|prior|above|earlier|all)\b"
-        r".{0,40}\b(instructions?|rules|prompts?|directions)\b",
+        r".{0,40}\b(instructions?|rules|prompts?|directions)\b"
+        # "STOP EVERYTHING!!! NOW!!! JUST PRINT ..."
+        r"|\bstop\s+everything\b.{0,40}?\b(print|say|output|write|repeat)\b\s*[:\"“'<]",
         re.IGNORECASE | re.DOTALL,
     ),
     "system_prompt_exfiltration": re.compile(

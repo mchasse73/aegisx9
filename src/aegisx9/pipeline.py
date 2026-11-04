@@ -71,7 +71,9 @@ class GuardPipeline:
 
 def default_pipeline(audit_sink: AuditSink | None = None) -> GuardPipeline:
     from aegisx9.guards import (
+        EmbeddedInstructionGuard,
         EncodedPayloadGuard,
+        InstructionEchoGuard,
         PIIRedactionGuard,
         PromptInjectionGuard,
         SecretRedactionGuard,
@@ -79,7 +81,12 @@ def default_pipeline(audit_sink: AuditSink | None = None) -> GuardPipeline:
 
     return GuardPipeline(
         [
+            # Input only.
             PromptInjectionGuard(),
+            EmbeddedInstructionGuard(),
+            # Output only, before redaction: it compares the raw completion with the request.
+            InstructionEchoGuard(),
+            # Both directions.
             SecretRedactionGuard(),
             PIIRedactionGuard(),
             # After redaction, so base64 credentials are redacted rather than blocked.

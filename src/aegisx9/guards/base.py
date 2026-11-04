@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from aegisx9.guards.embedded import ForcedLiteral
 
 
 class Direction(StrEnum):
@@ -47,6 +50,16 @@ class GuardContext:
     direction: Direction
     model: str = ""
     principal: str = ""
+    # The message's role ("user", "tool", ...); a tool message is all data.
+    role: str = ""
+    # Output direction only, for guards that compare a completion with its request. Both
+    # live as long as the request, are never logged and never reach an audit record.
+    # prompt_literals: the current turn's forced literals, computed once per request by the
+    # proxy hook (None = not computed). prompt_text: request data for callers without them.
+    prompt_text: str = field(default="", repr=False, compare=False)
+    prompt_literals: tuple[ForcedLiteral, ...] | None = field(
+        default=None, repr=False, compare=False
+    )
 
 
 @dataclass(frozen=True)

@@ -7,6 +7,7 @@ without LiteLLM installed.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import uuid
@@ -15,6 +16,7 @@ from typing import Any
 
 from aegisx9.audit import AuditEvent, pseudonymise
 from aegisx9.guards.base import Direction, GuardContext
+from aegisx9.guards.embedded import ForcedLiteral, request_literals
 from aegisx9.pipeline import GuardPipeline, default_pipeline
 from aegisx9.policy import ModelPolicy, PolicyViolationError
 from aegisx9.signing import AuditSigner, sign_event
@@ -50,6 +52,72 @@ class GuardBlockedError(Exception):
         super().__init__(self.message)
         self.guard = guard
         self.direction = direction
+
+
+# Messages whose content the request's caller supplied as input or data.
+_PROMPT_ROLES = frozenset({"user", "tool", "function"})
+
+
+def _text_parts(content: Any) -> list[dict[str, Any]]:
+    """The text parts of an OpenAI content-parts list; images and other parts are skipped."""
+    if not isinstance(content, list):
+        return []
+    return [
+        part
+        for part in content
+        if isinstance(part, dict)
+        and part.get("type") == "text"
+        and isinstance(part.get("text"), str)
+    ]
+
+
+def _merge_text_parts(content: list[Any], parts: list[dict[str, Any]], text: str) -> list[Any]:
+    first = next(i for i, part in enumerate(content) if part is parts[0])
+    merged = {"type": "text", "text": text}
+    ids = {id(part) for part in parts}
+    return [
+        merged if i == first else part
+        for i, part in enumerate(content)
+        if i == first or id(part) not in ids
+    ]
+
+
+def message_text(content: Any) -> str | None:
+    """A message's text: a string, or its text parts joined by newlines; None if it has none."""
+    if isinstance(content, str):
+        return content
+    parts = _text_parts(content)
+    return "\n".join(part["text"] for part in parts) if parts else None
+
+
+def current_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """This turn's input: the messages after the last assistant message that answered.
+
+    An assistant message that only calls tools (``tool_calls`` or ``function_call``) continues
+    the turn: the user's request and every tool result after it are still this turn's input.
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        message = messages[i]
+        if message.get("role") == "assistant" and not (
+            message.get("tool_calls") or message.get("function_call")
+        ):
+            return messages[i + 1 :]
+    return messages
+
+
+def prompt_literals(data: dict[str, Any]) -> tuple[ForcedLiteral, ...]:
+    """The literals this turn's user and tool messages tried to force, for the echo guard.
+
+    Computed once per request. pre_call has already redacted every message. The result goes
+    only into :attr:`GuardContext.prompt_literals`; it is never logged or audited.
+    """
+    pairs = []
+    for message in current_turn(list(data.get("messages", []) or [])):
+        role = str(message.get("role", ""))
+        text = message_text(message.get("content"))
+        if role in _PROMPT_ROLES and text:
+            pairs.append((role, text))
+    return request_literals(pairs)
 
 
 def _log_audit(event: AuditEvent) -> None:
@@ -98,16 +166,47 @@ class AegisGuard(_HookBase):  # type: ignore[misc,valid-type,unused-ignore]
         ctx = self._ctx(data, Direction.INPUT, subject)
         for message in data.get("messages", []):
             content = message.get("content")
-            if not isinstance(content, str):
+            msg_ctx = dataclasses.replace(ctx, role=str(message.get("role", "")))
+            if isinstance(content, str):
+                message["content"] = self._run_input(content, msg_ctx)
                 continue
-            result = self.pipeline.run(content, ctx)
-            if result.blocked:
-                raise GuardBlockedError(result.blocked_by or "unknown", Direction.INPUT)
-            message["content"] = result.text
+            # Content-parts list: every guard sees each text part (and redacts it in place),
+            # and with several parts also the joined text, so a marker in one part and an
+            # attack in the next are read together.
+            parts = _text_parts(content)
+            for part in parts:
+                part["text"] = self._run_input(part["text"], msg_ctx)
+            if len(parts) > 1:
+                joined = "\n".join(part["text"] for part in parts)
+                checked = self._run_input(joined, msg_ctx)
+                if checked != joined:
+                    # A redaction only the joined text revealed (a key split across parts):
+                    # it can't be mapped back onto the parts safely, so the text parts become
+                    # one part holding the redacted text, where the first one was.
+                    # Non-text parts keep their order.
+                    message["content"] = _merge_text_parts(content, parts, checked)
         return data
 
-    def post_call(self, data: dict[str, Any], completion: str, subject: str = "") -> str:
-        ctx = self._ctx(data, Direction.OUTPUT, subject)
+    def _run_input(self, text: str, ctx: GuardContext) -> str:
+        result = self.pipeline.run(text, ctx)
+        if result.blocked:
+            raise GuardBlockedError(result.blocked_by or "unknown", Direction.INPUT)
+        return result.text
+
+    def post_call(
+        self,
+        data: dict[str, Any],
+        completion: str,
+        subject: str = "",
+        literals: tuple[ForcedLiteral, ...] | None = None,
+    ) -> str:
+        """Guard one completion. ``literals`` is the request's :func:`prompt_literals`,
+        computed once per request when several choices are checked."""
+        if literals is None:
+            literals = prompt_literals(data)
+        ctx = dataclasses.replace(
+            self._ctx(data, Direction.OUTPUT, subject), prompt_literals=literals
+        )
         result = self.pipeline.run(completion, ctx)
         if result.blocked:
             raise GuardBlockedError(result.blocked_by or "unknown", Direction.OUTPUT)
@@ -127,11 +226,14 @@ class AegisGuard(_HookBase):  # type: ignore[misc,valid-type,unused-ignore]
         self, data: dict[str, Any], user_api_key_dict: Any, response: Any
     ) -> Any:
         subject = str(getattr(user_api_key_dict, "user_id", "") or "")
+        literals: tuple[ForcedLiteral, ...] | None = None
         for choice in getattr(response, "choices", []) or []:
             message = getattr(choice, "message", None)
             content = getattr(message, "content", None)
             if message is not None and isinstance(content, str):
-                message.content = self.post_call(data, content, subject)
+                if literals is None:
+                    literals = prompt_literals(data)  # once per request, for every choice
+                message.content = self.post_call(data, content, subject, literals)
         return response
 
 
