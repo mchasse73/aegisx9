@@ -4,8 +4,9 @@ An attacker wraps an instruction or a forbidden payload in an encoding the keywo
 can't read, then asks the model to decode it. This guard finds encoded spans, decodes each
 one, and blocks when the decoded bytes carry text:
 
-* ``encoded_<category>``: the decoded text matches a prompt-injection pattern. This check
-  runs on every decode, however much binary junk surrounds the text;
+* ``encoded_<category>``: the decoded text matches a prompt-injection pattern or a strong
+  embedded-instruction signal (:mod:`aegisx9.guards.embedded`). This check runs on every
+  decode, however much binary junk surrounds the text;
 * ``encoded_text``: the decoded bytes are readable prose, markup or code. Binary data
   (hashes, keys, images, git SHAs) doesn't count, nor does a JSON object whose string values
   are all single tokens (WebAuthn client data, API ids): prose needs spaces.
@@ -32,6 +33,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
 from aegisx9.guards.base import Direction, Finding, GuardContext, GuardResult, Verdict
+from aegisx9.guards.embedded import strong_signals
 from aegisx9.guards.injection import injection_categories
 
 # Candidate spans. The decoded-text test does the real filtering, so these only need to keep
@@ -200,7 +202,7 @@ class EncodedPayloadGuard:
     def check(self, text: str, ctx: GuardContext) -> GuardResult:
         counts: Counter[str] = Counter()
         for span in decoded_spans(text):
-            hits = injection_categories(span.text)
+            hits = injection_categories(span.text) + strong_signals(span.text)
             counts.update(f"encoded_{category}" for category in hits)
             if (
                 not hits

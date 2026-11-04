@@ -48,9 +48,9 @@ flowchart LR
     subgraph aegisx9["aegisx9 (k3s namespace)"]
         AP[Auth sidecar<br/>JWT ≤15 min → virtual key]
         GW[LiteLLM proxy]
-        IG[Input guards<br/>injection / jailbreak<br/>secret + PII redaction<br/>encoded payloads]
+        IG[Input guards<br/>injection / jailbreak<br/>embedded instructions<br/>secret + PII redaction<br/>encoded payloads]
         POL[Policy<br/>model allowlist<br/>budgets / rate limits]
-        OG[Output guards<br/>secret + PII redaction]
+        OG[Output guards<br/>instruction echo<br/>secret + PII redaction]
         OT[OpenTelemetry<br/>audit events]
     end
     LLM[(Model providers)]
