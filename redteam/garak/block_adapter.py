@@ -93,7 +93,8 @@ _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 def fill_empty_answer(payload: bytes) -> tuple[bytes, str] | None:
-    """When a completion's first answer is empty, the payload with a refusal in its place."""
+    """When a completion's first answer is empty, the payload with a refusal in its place
+    (or, for an answer cut off at max_tokens, with null content), and the finish reason."""
     try:
         reply = json.loads(payload)
         choice = reply["choices"][0]
@@ -106,8 +107,11 @@ def fill_empty_answer(payload: bytes) -> tuple[bytes, str] | None:
         return None  # a tool call is an answer, and may be the jailbreak
     reason = str(choice.get("finish_reason") or "none")
     if reason == "length":
-        return None  # cut off before any text: not a refusal, so leave it unscored (#193)
-    message["content"] = f"[EMPTY:{reason}] {REFUSAL}"
+        # Cut off before any text: not a refusal. Null, not "", so garak leaves it unscored
+        # and the coverage check sees it (#193).
+        message["content"] = None
+    else:
+        message["content"] = f"[EMPTY:{reason}] {REFUSAL}"
     return json.dumps(reply).encode(), reason
 
 

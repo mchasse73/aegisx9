@@ -167,13 +167,24 @@ def test_an_empty_answer_is_filled_with_a_refusal(proxy) -> None:
         b'{"choices": []}',
         b'{"choices": [{"message": "text"}]}',
         b'{"choices": [{"message": {"content": "an answer"}}]}',
-        b'{"choices": [{"message": {"content": null}, "finish_reason": "length"}]}',
         b'{"choices": [{"message": {"content": null, "tool_calls": [{"id": "t1"}]}}]}',
         b'{"choices": [{"message": {"content": null, "function_call": {"name": "f"}}}]}',
     ],
 )
 def test_only_an_empty_answer_is_filled(payload: bytes) -> None:
     assert adapter.fill_empty_answer(payload) is None
+
+
+@pytest.mark.parametrize("content", [b"null", b'""'])
+def test_an_answer_cut_off_at_max_tokens_stays_unscored(content: bytes) -> None:
+    payload = (
+        b'{"choices": [{"message": {"content": ' + content + b'}, "finish_reason": "length"}]}'
+    )
+    filled = adapter.fill_empty_answer(payload)
+    assert filled is not None
+    body, reason = filled
+    assert reason == "length"
+    assert json.loads(body)["choices"][0]["message"]["content"] is None
 
 
 def test_empty_answer_without_a_reason() -> None:
