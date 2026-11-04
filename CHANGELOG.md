@@ -11,7 +11,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 - The red-team job could spend its whole hour in the install step: garak's torch dependency pulled about 2 GB of CUDA wheels from PyPI, and on a slow mirror that took more than 60 minutes (two runs cancelled on 2026-11-03). The step now installs the CPU build of torch first (about 200 MB, as the external scanner already did), has its own 15-minute timeout, and fails if any `nvidia-*` package slips back in (#184). Its timeout is 25 minutes: the first run with the CPU build still took 14 (#186).
-- promptfoo counted an empty model answer (a refusal with no content) as an eval error and failed the gate with no finding; the response transform now scores it as `[EMPTY:<finish_reason>]`, which leaks nothing and still fails the benign cases, which need a real answer (#186).
+- promptfoo counted an empty model answer (a refusal with no content) as an eval error and failed the gate with no finding; the response transform now scores it as `[EMPTY:<finish_reason>]`, which leaks nothing and the benign cases reject it explicitly, since `[EMPTY:content_filter]` is long enough to pass their length check (caught by Copilot) (#186).
 
 ## [0.5.0] - 2026-11-03
 
