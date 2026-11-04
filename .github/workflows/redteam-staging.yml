@@ -155,7 +155,7 @@ jobs:
         run: |
           f="${HOME}/.local/share/garak/garak.log"
           [ -f "$f" ] || exit 0
-          grep -E 'ERROR|WARNING|Error|Exception' "$f" | tail -n 30 \
+          { grep -E 'ERROR|WARNING|Error|Exception' "$f" || true; } | tail -n 30 \
             | python3 scripts/ci/redact_log.py --mask-env AEGIS_STAGING_URL --mask-env AEGIS_REDTEAM_KEY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
