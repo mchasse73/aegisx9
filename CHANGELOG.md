@@ -9,6 +9,9 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 - Staging runs v0.5.0 (digest `sha256:f6b1ffef…`, the signed index the 0.5.0 tag points at), so the encoded-payload guard is live there (#172).
 
+### Fixed
+- The red-team job could spend its whole hour in the install step: garak's torch dependency pulled about 2 GB of CUDA wheels from PyPI, and on a slow mirror that took more than 60 minutes (two runs cancelled on 2026-11-03). The step now installs the CPU build of torch first (about 200 MB, as the external scanner already did), has its own 15-minute timeout, and fails if any `nvidia-*` package slips back in (#184).
+
 ## [0.5.0] - 2026-11-03
 
 ### Added
