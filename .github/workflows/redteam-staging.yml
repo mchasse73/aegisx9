@@ -125,12 +125,26 @@ jobs:
           export OPENAICOMPATIBLE_API_KEY="${AEGIS_REDTEAM_KEY}"
           # garak opens its report file but never creates the directory.
           mkdir -p "${RUNNER_TEMP}/garak"
-          python3 redteam/garak/render_generator.py > "${RUNNER_TEMP}/garak-generator.json"
+          # garak drops a 400 as a failed call, so guard blocks never reached the score. The
+          # loopback adapter turns a guard block into a "[BLOCKED]" completion and passes
+          # everything else through; gate.py fails a family whose attempts went unscored (#188).
+          python3 redteam/garak/block_adapter.py \
+            --port-file "${RUNNER_TEMP}/adapter.port" --stats "${RUNNER_TEMP}/garak/adapter-stats.json" &
+          adapter_pid=$!
+          trap 'kill "${adapter_pid}" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 50); do [ -s "${RUNNER_TEMP}/adapter.port" ] && break; sleep 0.1; done
+          [ -s "${RUNNER_TEMP}/adapter.port" ] || { echo "::error::block adapter did not start"; exit 1; }
+          AEGIS_STAGING_URL="http://127.0.0.1:$(cat "${RUNNER_TEMP}/adapter.port")" \
+            python3 redteam/garak/render_generator.py > "${RUNNER_TEMP}/garak-generator.json"
           python3 -m garak --config redteam/garak/aegisx9.yaml \
             --target_type openai.OpenAICompatible --target_name "${AEGIS_REDTEAM_MODEL}" \
             --generator_option_file "${RUNNER_TEMP}/garak-generator.json" \
             --report_prefix "${RUNNER_TEMP}/garak/aegisx9" 2>&1 \
             | python3 scripts/ci/redact_log.py --mask-env AEGIS_STAGING_URL
+          kill "${adapter_pid}" 2>/dev/null || echo "::error::the block adapter exited before garak finished"
+          wait "${adapter_pid}" || true
+          stats="${RUNNER_TEMP}/garak/adapter-stats.json"
+          [ -f "$stats" ] && echo "gateway responses seen by garak: $(cat "$stats")"
           python3 redteam/garak/gate.py \
             --report "${RUNNER_TEMP}/garak/aegisx9.report.jsonl" \
             --thresholds redteam/garak/thresholds.json

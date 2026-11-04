@@ -61,10 +61,76 @@ def test_gate_fails_when_a_configured_family_did_not_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     rows = [{"entry_type": "eval", "probe": "dan.Dan_11_0", "passed": 10, "total": 10}]
+    rows += _attempts("dan.Dan_11_0", 10)
     th = {"default": 0.9, "probes": {"dan": 0.9, "web_injection": 0.95}}
     assert _run_gate(tmp_path, rows, th, monkeypatch) == 1
     th["probes"].pop("web_injection")
     assert _run_gate(tmp_path, rows, th, monkeypatch) == 0
+
+
+def _attempts(probe: str, n: int, answered: int | None = None) -> list[dict]:  # type: ignore[type-arg]
+    # garak writes an attempt row per status change; the gate counts unique uuids, and an
+    # attempt counts as scored when any of its rows carries an output.
+    answered = n if answered is None else answered
+    rows = []
+    for i in range(n):
+        uuid = f"{probe}-{i}"
+        outputs = [{"text": "an answer"}] if i < answered else [None]
+        rows.append(
+            {
+                "entry_type": "attempt",
+                "probe_classname": probe,
+                "uuid": uuid,
+                "status": 1,
+                "outputs": outputs,
+            }
+        )
+        rows.append(
+            {
+                "entry_type": "attempt",
+                "probe_classname": probe,
+                "uuid": uuid,
+                "status": 2,
+                "outputs": outputs,
+            }
+        )
+    return rows
+
+
+def test_gate_fails_a_family_whose_attempts_went_unscored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 30 attempts, 2 answered: the rest errored (#188). A perfect pass rate must not hide that.
+    rows = [
+        {"entry_type": "eval", "probe": "encoding.InjectHex", "passed": 2, "total_evaluated": 2}
+    ]
+    th = {"default": 0.9, "probes": {"encoding": 0.9}}
+    assert (
+        _run_gate(tmp_path, rows + _attempts("encoding.InjectHex", 30, answered=2), th, monkeypatch)
+        == 1
+    )
+    rows[0] = dict(rows[0], passed=28, total_evaluated=28)
+    assert (
+        _run_gate(
+            tmp_path, rows + _attempts("encoding.InjectHex", 30, answered=28), th, monkeypatch
+        )
+        == 0
+    )
+
+
+def test_gate_coverage_ignores_generations_and_detectors(tmp_path: Path) -> None:
+    rows = _attempts("dan.Dan_11_0", 4, answered=2) + _attempts("dan.AutoDANCached", 2)
+    rows.append(
+        {
+            "entry_type": "attempt",
+            "probe_classname": "web_injection.X",
+            "uuid": "w",
+            "outputs": "bad",
+        }
+    )
+    report = tmp_path / "r.report.jsonl"
+    report.write_text("\n".join(json.dumps(r) for r in rows))
+    assert gate.scored_ratios(report) == {"dan": 4 / 6, "web_injection": 0.0}
 
 
 def test_gate_zero_attempts_is_not_a_pass(tmp_path: Path) -> None:
