@@ -70,9 +70,20 @@ class GuardPipeline:
 
 
 def default_pipeline(audit_sink: AuditSink | None = None) -> GuardPipeline:
-    from aegisx9.guards import PIIRedactionGuard, PromptInjectionGuard, SecretRedactionGuard
+    from aegisx9.guards import (
+        EncodedPayloadGuard,
+        PIIRedactionGuard,
+        PromptInjectionGuard,
+        SecretRedactionGuard,
+    )
 
     return GuardPipeline(
-        [PromptInjectionGuard(), SecretRedactionGuard(), PIIRedactionGuard()],
+        [
+            PromptInjectionGuard(),
+            SecretRedactionGuard(),
+            PIIRedactionGuard(),
+            # After redaction, so base64 credentials are redacted rather than blocked.
+            EncodedPayloadGuard(),
+        ],
         audit_sink=audit_sink,
     )
