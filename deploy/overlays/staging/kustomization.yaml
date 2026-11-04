@@ -16,7 +16,7 @@ helmCharts:
     valuesFile: values.yaml
 images:
   - name: ghcr.io/mchasse73/aegisx9
-    # v0.4.2: the signed digest from the release workflow for main ea1df13 (2026-11-03), the
-    # same index the 0.4.2 tag points at (tag run verified main's signatures, then re-tagged).
+    # v0.5.0: the signed digest from the release workflow for main 35e8b7e (2026-11-03), the
+    # same index the 0.5.0 tag points at (tag run verified main's signatures, then re-tagged).
     # Guard blocks answer 400 invalid_request_error instead of 500 (#171).
-    digest: sha256:02c3355ec5c1968b4fcb4fb08285da676937e5be80ae65b90f9d2ff15fd73645
+    digest: sha256:f6b1ffefa8d225c3ad173d6792468c6d853d1494594938aa7d8d0e3666706c8f
