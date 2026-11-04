@@ -128,9 +128,18 @@ def test_gate_coverage_ignores_generations_and_detectors(tmp_path: Path) -> None
             "outputs": "bad",
         }
     )
+    for uuid, text in (("e", ""), ("n", None)):
+        rows.append(
+            {
+                "entry_type": "attempt",
+                "probe_classname": "leakreplay.X",
+                "uuid": uuid,
+                "outputs": [{"text": text}],
+            }
+        )
     report = tmp_path / "r.report.jsonl"
     report.write_text("\n".join(json.dumps(r) for r in rows))
-    assert gate.scored_ratios(report) == {"dan": 4 / 6, "web_injection": 0.0}
+    assert gate.scored_ratios(report) == {"dan": 4 / 6, "web_injection": 0.0, "leakreplay": 0.5}
 
 
 def test_gate_zero_attempts_is_not_a_pass(tmp_path: Path) -> None:

@@ -26,7 +26,8 @@ def _has_output(row: dict[str, object]) -> bool:
     outputs = row.get("outputs")
     if not isinstance(outputs, list):
         return False
-    return any(o.get("text") if isinstance(o, dict) else o for o in outputs)
+    # An empty string is an output (detectors score it); only a missing one is not.
+    return any((o.get("text") if isinstance(o, dict) else o) is not None for o in outputs)
 
 
 def scored_ratios(report: Path) -> dict[str, float]:

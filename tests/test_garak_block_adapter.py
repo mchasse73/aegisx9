@@ -40,6 +40,7 @@ REPLIES = {
     "bad": (400, {"error": {"message": "unknown model", "type": "invalid_request_error"}}),
     "limited": (429, {"error": {"message": "rate limited"}}),
     "ok": (200, {"choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}]}),
+    "redirect": (307, {"error": {"message": "moved"}}),
 }
 
 
@@ -57,6 +58,8 @@ class _Gateway(BaseHTTPRequestHandler):
         payload = json.dumps(reply).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        if prompt == "redirect":
+            self.send_header("Location", "http://127.0.0.1:9/elsewhere")
         if prompt == "limited":
             self.send_header("Retry-After", "3")
             self.send_header("x-ratelimit-remaining-requests", "0")
@@ -107,7 +110,9 @@ def test_a_guard_block_becomes_a_scoreable_completion(proxy) -> None:
     )
 
 
-@pytest.mark.parametrize(("prompt", "status"), [("bad", 400), ("limited", 429), ("ok", 200)])
+@pytest.mark.parametrize(
+    ("prompt", "status"), [("bad", 400), ("limited", 429), ("ok", 200), ("redirect", 307)]
+)
 def test_everything_else_passes_through(proxy, prompt: str, status: int) -> None:
     got, body = _call(proxy, prompt, "Bearer x")
     assert got == status

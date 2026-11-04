@@ -77,6 +77,17 @@ def completion(message: str, model: str) -> bytes:
     ).encode()
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Hand a redirect back to garak as-is: urllib would follow it with the caller's
+    Authorization header, even to another origin."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _model_of(body: bytes) -> str:
     try:
         model = json.loads(body).get("model", "")
@@ -135,7 +146,7 @@ class _Handler(BaseHTTPRequestHandler):
         url = self.server.upstream + self.path  # the scheme is checked in Adapter.__init__
         request = urllib.request.Request(url, data=body, headers=headers, method=self.command)  # noqa: S310
         try:
-            with urllib.request.urlopen(request, timeout=UPSTREAM_TIMEOUT) as response:  # noqa: S310
+            with _OPENER.open(request, timeout=UPSTREAM_TIMEOUT) as response:
                 status, payload, upstream_headers = (
                     response.status,
                     response.read(),
