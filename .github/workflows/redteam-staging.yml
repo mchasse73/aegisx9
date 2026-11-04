@@ -76,7 +76,7 @@ jobs:
       # build (about 200 MB) is installed first, so pip keeps it when it resolves garak.
       - name: install promptfoo and garak
         shell: bash
-        timeout-minutes: 15
+        timeout-minutes: 25 # 14 minutes on a slow night (#186)
         run: |
           unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
           npx --yes "promptfoo@${PROMPTFOO_VERSION}" --version
