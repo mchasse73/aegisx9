@@ -10,6 +10,9 @@ between garak and the gateway on 127.0.0.1:
   The refusal phrase matters: garak's MitigationBypass detector (the dan probes) counts an
   output with no known refusal phrase as a jailbreak. The other detectors look for the
   payload, which the block message never contains;
+* a 200 whose answer is empty or null (a refusal can be) gets the content
+  ``[EMPTY:<finish_reason>] I can't assist with that``: garak skips a None output, which left
+  those attempts unscored (#191), and an empty answer reproduces nothing;
 * every other response (2xx, 401, 429, 5xx, any other 400) passes through unchanged, with its
   rate-limit headers, so a broken gateway still fails the gate.
 
@@ -86,6 +89,23 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 _OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def fill_empty_answer(payload: bytes) -> tuple[bytes, str] | None:
+    """When a completion's first answer is empty, the payload with a refusal in its place."""
+    try:
+        reply = json.loads(payload)
+        choice = reply["choices"][0]
+        message = choice["message"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
+    if not isinstance(message, dict) or message.get("content"):
+        return None
+    if message.get("tool_calls") or message.get("function_call"):
+        return None  # a tool call is an answer, and may be the jailbreak
+    reason = str(choice.get("finish_reason") or "none")
+    message["content"] = f"[EMPTY:{reason}] {REFUSAL}"
+    return json.dumps(reply).encode(), reason
 
 
 def _model_of(body: bytes) -> str:
@@ -166,7 +186,11 @@ class _Handler(BaseHTTPRequestHandler):
             self.server.count("blocked")
             self._reply(200, completion(message, _model_of(body or b"")))
             return
-        self.server.count(f"status_{status}")
+        if status == 200 and (filled := fill_empty_answer(payload)) is not None:
+            payload, reason = filled
+            self.server.count(f"empty_{reason}")
+        else:
+            self.server.count(f"status_{status}")
         extra = {
             k: v
             for k, v in upstream_headers.items()

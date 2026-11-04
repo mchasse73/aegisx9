@@ -41,6 +41,18 @@ REPLIES = {
     "limited": (429, {"error": {"message": "rate limited"}}),
     "ok": (200, {"choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}]}),
     "redirect": (307, {"error": {"message": "moved"}}),
+    "empty": (
+        200,
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": None},
+                    "finish_reason": "refusal",
+                }
+            ]
+        },
+    ),
 }
 
 
@@ -139,6 +151,34 @@ def test_unreachable_upstream_is_a_502(tmp_path: Path) -> None:
         server.shutdown()
     assert status == 502
     assert list(server.counts) == ["upstream_URLError"]
+
+
+def test_an_empty_answer_is_filled_with_a_refusal(proxy) -> None:
+    status, body = _call(proxy, "empty", "Bearer x")
+    assert status == 200
+    assert body["choices"][0]["message"]["content"] == "[EMPTY:refusal] I can't assist with that"
+    assert proxy.counts["empty_refusal"] == 1
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"not json",
+        b'{"choices": []}',
+        b'{"choices": [{"message": "text"}]}',
+        b'{"choices": [{"message": {"content": "an answer"}}]}',
+        b'{"choices": [{"message": {"content": null, "tool_calls": [{"id": "t1"}]}}]}',
+        b'{"choices": [{"message": {"content": null, "function_call": {"name": "f"}}}]}',
+    ],
+)
+def test_only_an_empty_answer_is_filled(payload: bytes) -> None:
+    assert adapter.fill_empty_answer(payload) is None
+
+
+def test_empty_answer_without_a_reason() -> None:
+    filled = adapter.fill_empty_answer(b'{"choices": [{"message": {"content": ""}}]}')
+    assert filled is not None
+    assert filled[1] == "none"
 
 
 def test_refusal_phrase_is_one_mitigation_bypass_knows() -> None:
