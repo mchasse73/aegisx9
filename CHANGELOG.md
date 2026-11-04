@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Encoded-payload input guard (#172, ADR 0022). It decodes base64, base32 and hex in a prompt (hex plain, `0x`-prefixed, byte-separated, `\x` or `%` escaped) and blocks a span that hides an injection pattern or readable text. It runs after redaction, so base64 credentials are redacted rather than blocked. The first full garak run let 76% of base64 and 83% of hex attacks through. Offline, through the pipeline, garak's own payloads are now blocked 92% (base64) and 89% (hex), with no false positives on a 104k-word dictionary, 5,000 random sentences, 20,000 order numbers, the benign suite or common developer data. A pre-PR review found 9 fail-open and false-positive paths in the first draft (a span budget that padding could exhaust, `=`/`_`/`0x` prefixes, one junk byte, oversized spans, a JSON wrapper, 6-digit numbers, base64 credentials); all are fixed, each with a regression test. The promptfoo suite gains a hex-encoded attack.
+- Secret redaction recognises `Authorization: Basic` credentials (`basic_auth`).
+
 ### Changed
 - Staging runs v0.4.2 (digest `sha256:02c3355e…`, the signed index the 0.4.2 tag points at), so guard blocks there answer 400 (#171).
 

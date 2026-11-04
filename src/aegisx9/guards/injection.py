@@ -34,17 +34,18 @@ _PATTERNS: dict[str, re.Pattern[str]] = {
 }
 
 
+def injection_categories(text: str) -> tuple[str, ...]:
+    """The names of the injection patterns ``text`` matches (shared with the encoded guard)."""
+    return tuple(category for category, pattern in _PATTERNS.items() if pattern.search(text))
+
+
 @dataclass
 class PromptInjectionGuard:
     name: str = "prompt_injection"
     directions: frozenset[Direction] = field(default_factory=lambda: frozenset({Direction.INPUT}))
 
     def check(self, text: str, ctx: GuardContext) -> GuardResult:
-        findings = tuple(
-            Finding(self.name, category)
-            for category, pattern in _PATTERNS.items()
-            if pattern.search(text)
-        )
+        findings = tuple(Finding(self.name, category) for category in injection_categories(text))
         if findings:
             return GuardResult(Verdict.BLOCK, text, findings)
         return GuardResult.allow(text)

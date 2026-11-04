@@ -23,6 +23,11 @@ SECRET_PATTERNS: Mapping[str, re.Pattern[str]] = {
     ),
     "jwt": re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
     "bearer_token": re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]{20,}=*"),
+    # "Authorization: Basic <b64>", or a bare "Basic <b64>" whose value can't be a word.
+    "basic_auth": re.compile(
+        r"(?i:\bauthorization\s*:\s*basic\s+)[A-Za-z0-9+/]{4,}={0,2}"
+        r"|\bBasic\s+(?=[A-Za-z0-9+/]*[0-9+/=])[A-Za-z0-9+/]{8,}={0,2}"
+    ),
     "generic_api_key": re.compile(
         r"(?i)\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*['\"]?[A-Za-z0-9._~+/-]{16,}"
     ),
