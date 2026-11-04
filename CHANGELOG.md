@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Staging runs v0.6.0 (digest `sha256:12de7225…`, the signed index the 0.6.0 tag points at), so the embedded-instruction and instruction-echo guards are live there (#179, #195).
+
 ## [0.6.0] - 2026-11-04
 
 ### Added

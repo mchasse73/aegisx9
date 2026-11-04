@@ -16,7 +16,7 @@ helmCharts:
     valuesFile: values.yaml
 images:
   - name: ghcr.io/mchasse73/aegisx9
-    # v0.5.0: the signed digest from the release workflow for main 35e8b7e (2026-11-03), the
-    # same index the 0.5.0 tag points at (tag run verified main's signatures, then re-tagged).
-    # Adds the encoded-payload input guard (#172, ADR 0022).
-    digest: sha256:f6b1ffefa8d225c3ad173d6792468c6d853d1494594938aa7d8d0e3666706c8f
+    # v0.6.0: the signed digest from the release workflow for main a8bffc2 (2026-11-04), the
+    # same index the 0.6.0 tag points at (tag run verified main's signatures, then re-tagged).
+    # Adds the embedded-instruction and instruction-echo guards (#179, #195, ADR 0024).
+    digest: sha256:12de72258227af5e85f97d2b68b6e0b1279a452b9e037608779de2c640b6141e
