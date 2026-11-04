@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import bisect
 import re
+import urllib.parse
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -59,8 +60,10 @@ SCANNED_ROLES = frozenset({"user", "", *DATA_ROLES})
 _VERBS = r"(?:print|say|output|write|type|repeat|return|respond|reply|answer|state|tell)"
 _DOC = r"(?:data|text|document|article|message|email|content|input|snippets?|page|report)"
 
-# Every pattern runs on the lower-cased text and starts with a literal; a match must also
-# start at a word boundary (checked in _word_matches).
+# Every pattern runs on the lower-cased text and starts with a literal. A phrase must also
+# start at a word boundary (checked in _word_matches); a session marker needn't, since
+# "text<|endoftext|>" is as much a marker as " <|endoftext|>". No two adjacent quantifiers
+# can match the same characters, so no pattern backtracks quadratically (a test times each).
 _STRONG: dict[str, tuple[re.Pattern[str], ...]] = {
     "context_override": tuple(
         re.compile(p)
@@ -68,14 +71,14 @@ _STRONG: dict[str, tuple[re.Pattern[str], ...]] = {
             # "Ignore the rest of this data and print ..."
             *(
                 rf"{verb}\s+the\s+rest\s+of\s+(?:this|the|these)\s+{_DOC}"
-                rf"\s*,?\s+and\s+(?:instead\s+)?(?:just\s+|only\s+|simply\s+)?{_VERBS}\b"
+                rf"(?:\s*,)?\s+and\s+(?:instead\s+)?(?:just\s+|only\s+|simply\s+)?{_VERBS}\b"
                 for verb in ("ignore", "disregard", "skip")
             ),
             # "Disregard all info except for the following information ..."
             r"disregard\s+(?:all|any)\s+(?:other\s+)?(?:info(?:rmation)?|content|text|data|context)"
-            r"\s+(?:except|but|other\s+than)(?:\s+for)?\s+(?:the\s+following|what\s+is|this|these)\b",
+            r"\s+(?:except|but|other\s+than)\s+(?:for\s+)?(?:the\s+following|what\s+is|this|these)\b",
             # "... ignore them and instead focus exclusively on ..."
-            r"ignore\s+(?:them|those|these|it|everything(?:\s+else)?)\s*,?\s+and\s+instead\s+"
+            r"ignore\s+(?:them|those|these|it|everything(?:\s+else)?)(?:\s*,)?\s+and\s+instead\s+"
             r"focus\s+(?:exclusively|only|solely)\b",
             # "... Nevermind. Ignore any previous ... instructions"
             r"never\s?mind\b[\s.,!;:-]{0,10}(?:ignore|disregard|forget)\b[^\n]{0,40}?\binstructions?\b",
@@ -84,7 +87,7 @@ _STRONG: dict[str, tuple[re.Pattern[str], ...]] = {
     "session_marker": tuple(
         re.compile(p)
         for p in (
-            r"<\s*/?\s*(?:end|stop)\s+of\s+(?:session|conversation|context|chat|prompt|turn)\s*>",
+            r"<\s*(?:/\s*)?(?:end|stop)\s+of\s+(?:session|conversation|context|chat|prompt|turn)\s*>",
             r"\[\s*(?:end|stop)\s+of\s+(?:session|conversation|context|chat|prompt|turn)\s*\]",
             r"<\|(?:endoftext|im_end|eot_id|end_of_turn)\|>",
         )
@@ -98,9 +101,8 @@ _REGION_LINE = re.compile(r"\n[ \t]*(?:[-=*_~#]{4,}[ \t]*(?=\n|$)|`{3,}|~{3,}|>)
 # ... or after a line that introduces "the following:" block.
 _REGION_INTRO = re.compile(r"the\s+following\b[^\n:]{0,60}:[ \t]*(?=\n|$)")
 _ROLE_LINE = re.compile(r"\n[ \t>*_]{0,8}(?:system|assistant|user|human|ai|bot)[ \t]*:")
-_STACKED_SEPARATORS = re.compile(
-    r"\n[ \t]*[-=*_~#]{4,}[ \t]*\n(?:[ \t]*\n){0,3}[ \t]*[-=*_~#]{4,}[ \t]*(?=\n|$)"
-)
+_SEPARATOR = re.compile(r"[-=*_~#]{4,}")
+_MAX_STACK_GAP = 3  # blank lines allowed between two stacked separators
 
 _FORCING: tuple[re.Pattern[str], ...] = tuple(
     re.compile(p)
@@ -113,7 +115,7 @@ _FORCING: tuple[re.Pattern[str], ...] = tuple(
         r"answer\s+(?:with\s+)?only\b",
         r"provide\s+it\s+to\s+the\s+user\b",
         r"focus\s+(?:only|exclusively|solely)\s+on\b",
-        r"translate\s+(?:this|it)(?:\s+\w+)?\s+as\b",
+        r"translate\s+(?:this|it)\s+(?:\w+\s+)?as\b",
     )
 )
 # A bare verb forces only straight after one of these words and right before a literal.
@@ -171,7 +173,10 @@ def _word_matches(pattern: re.Pattern[str], low: str) -> Iterator[re.Match[str]]
 def _strong_counts(low: str) -> Counter[str]:
     counts: Counter[str] = Counter()
     for category, patterns in _STRONG.items():
-        n = sum(1 for p in patterns for _ in _word_matches(p, low))
+        if category == "session_marker":
+            n = sum(1 for p in patterns for _ in p.finditer(low))
+        else:
+            n = sum(1 for p in patterns for _ in _word_matches(p, low))
         if n:
             counts[category] = n
     return counts
@@ -274,12 +279,21 @@ def _forcing(region: str, low: str) -> Iterator[tuple[int, list[str]]]:
             yield match.start(), literals
 
 
+def _hostname(token: str) -> tuple[str, bool]:
+    """The host a token names, and whether it had an http(s) scheme ("" if it names none)."""
+    low = token.lower()
+    if low.startswith(("http://", "https://")):
+        try:
+            return urllib.parse.urlsplit(low).hostname or "", True
+        except ValueError:
+            return "", True
+    host = re.split(r"[/?#]", low, maxsplit=1)[0]
+    return host.rsplit("@", 1)[-1].split(":", 1)[0], False
+
+
 def is_link(token: str) -> bool:
     """A URL or a domain name; a dotted file name (``main.py``) is neither."""
-    low = token.lower()
-    scheme = low.startswith(("http://", "https://"))
-    host = low.split("://", 1)[1] if scheme else low
-    host = host.split("/", 1)[0]
+    host, scheme = _hostname(token)
     match = _HOST.fullmatch(host)
     if match is None:
         return False
@@ -295,6 +309,9 @@ def _expand(literals: list[str]) -> Iterator[tuple[str, bool]]:
                 token = token.rstrip(".:!?")
                 if "." in token and len(token) <= 300 and is_link(token):
                     yield token, True
+                    host, _ = _hostname(token)
+                    if host and host != token.lower():
+                        yield host, True
 
 
 def _forced(region: str) -> dict[str, bool]:
@@ -348,6 +365,26 @@ def _end_of_previous_line(text: str, line_start: int) -> int:
     return i
 
 
+def _stacked_separator_ends(region: str) -> set[int]:
+    """The end offset of every separator line that sits on top of another one (at most
+    _MAX_STACK_GAP blank lines apart), so the last line of a stack of any height counts."""
+    ends: set[int] = set()
+    offset = 0
+    blanks = _MAX_STACK_GAP + 1  # blank lines since the last separator line
+    for line in region.split("\n"):
+        body = line.lstrip(" \t")
+        if _SEPARATOR.fullmatch(body):
+            if blanks <= _MAX_STACK_GAP:
+                ends.add(offset + len(line))
+            blanks = 0
+        elif body:
+            blanks = _MAX_STACK_GAP + 1
+        else:
+            blanks += 1
+        offset += len(line) + 1
+    return ends
+
+
 def _scan(text: str, role: str) -> tuple[Counter[str], bool]:
     """Signal counts, and whether a forcing literal was planted on a turn or separator."""
     text = _normalise(text)
@@ -359,7 +396,7 @@ def _scan(text: str, role: str) -> tuple[Counter[str], bool]:
     counts = _strong_counts(region_low)
     lines = "\n" + region_low  # offsets in ``lines`` are region offsets + 1
     role_lines = {m.start() for m in _ROLE_LINE.finditer(lines)}  # each one a line's "\n"
-    stacked_ends = {m.end() - 1 for m in _STACKED_SEPARATORS.finditer(lines)}
+    stacked_ends = _stacked_separator_ends(region)
     if role_lines:
         counts["fake_role_turn"] = len(role_lines)
     if stacked_ends:

@@ -46,10 +46,12 @@ an instruction inside data, and a literal the model is told to emit.
    line. A message with none of these has no data region. Line endings are normalised first
    (CRLF and lone CR become LF, trailing blanks are dropped), so a Windows-style paste reads
    the same. The proxy hook now passes each message's role in `GuardContext.role`.
+   An assistant message that only calls tools continues the current turn rather than ending it.
    OpenAI content-parts lists are flattened: every input guard sees each text part, and with
    several parts also their joined text, so a marker in one part and an attack in the next
-   are read together. Before this change the hook skipped list content for every guard,
-   including the redaction guards.
+   are read together. If only the joined text needs a redaction (a key split across parts),
+   the text parts become one redacted part where the first one was. Before this change the
+   hook skipped list content for every guard, including the redaction guards.
 3. The guard blocks on any strong signal. It also blocks a forcing literal *planted* in the
    structure: on a fake role turn's own line, or on the line straight after stacked
    separators. Weak signals on their own are allowed, and their findings go to the audit log.
@@ -118,6 +120,16 @@ an instruction inside data, and a literal the model is told to emit.
   - the user's own instructions tripped strong signals;
   - content-parts lists weren't guarded at all;
   - the echo guard recomputed the prompt's literals for every choice.
+- Copilot's review of the PR then found 7 more, all fixed with regression tests:
+  - two patterns backtracked quadratically on long whitespace runs; every pattern is now
+    timed on 64 KB pathological input;
+  - a private key split across two content parts was redacted only in the joined check, and
+    that result was discarded. The text parts are now merged into one redacted part, and
+    non-text parts keep their order;
+  - a session marker glued to a word wasn't matched;
+  - URLs with ports, queries or fragments weren't counted as links;
+  - three or more stacked separators weren't checked;
+  - an assistant tool call ended the turn, which cut the user's request out of it.
 - Hold-out, not tuned against: 1,848 of 7,168 blocked (26%), below the 80% we aimed for. The owner
   chose to ship anyway (2026-11-04): the guards close the gate's two probes with no measured
   false positives, and the hold-out set becomes the acceptance bar for the classifier (#198).

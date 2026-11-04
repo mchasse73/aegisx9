@@ -71,6 +71,17 @@ def _text_parts(content: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _merge_text_parts(content: list[Any], parts: list[dict[str, Any]], text: str) -> list[Any]:
+    first = next(i for i, part in enumerate(content) if part is parts[0])
+    merged = {"type": "text", "text": text}
+    ids = {id(part) for part in parts}
+    return [
+        merged if i == first else part
+        for i, part in enumerate(content)
+        if i == first or id(part) not in ids
+    ]
+
+
 def message_text(content: Any) -> str | None:
     """A message's text: a string, or its text parts joined by newlines; None if it has none."""
     if isinstance(content, str):
@@ -80,9 +91,16 @@ def message_text(content: Any) -> str | None:
 
 
 def current_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The messages after the last assistant message: this turn's input."""
+    """This turn's input: the messages after the last assistant message that answered.
+
+    An assistant message that only calls tools (``tool_calls`` or ``function_call``) continues
+    the turn: the user's request and every tool result after it are still this turn's input.
+    """
     for i in range(len(messages) - 1, -1, -1):
-        if messages[i].get("role") == "assistant":
+        message = messages[i]
+        if message.get("role") == "assistant" and not (
+            message.get("tool_calls") or message.get("function_call")
+        ):
             return messages[i + 1 :]
     return messages
 
@@ -159,7 +177,14 @@ class AegisGuard(_HookBase):  # type: ignore[misc,valid-type,unused-ignore]
             for part in parts:
                 part["text"] = self._run_input(part["text"], msg_ctx)
             if len(parts) > 1:
-                self._run_input("\n".join(part["text"] for part in parts), msg_ctx)
+                joined = "\n".join(part["text"] for part in parts)
+                checked = self._run_input(joined, msg_ctx)
+                if checked != joined:
+                    # A redaction only the joined text revealed (a key split across parts):
+                    # it can't be mapped back onto the parts safely, so the text parts become
+                    # one part holding the redacted text, where the first one was.
+                    # Non-text parts keep their order.
+                    message["content"] = _merge_text_parts(content, parts, checked)
         return data
 
     def _run_input(self, text: str, ctx: GuardContext) -> str:
