@@ -1,0 +1,185 @@
+# Guard evaluation (refs #198, ADR 0024): scores the input guards, and optionally Hugging Face
+# prompt-injection classifiers, against garak's target and hold-out probes and the
+# false-positive corpora. GitHub-hosted runners only: it runs PR code, so never add a
+# self-hosted runner here.
+#
+# - pull_request (guard, pipeline or eval changes): heuristics only, no environment, no
+#   secrets. Fails if a target family drops below 100% or any false-positive corpus is hit.
+# - workflow_dispatch: heuristics, plus one report-only job per model in `models`. Those jobs
+#   run in the `guard-eval` environment (main only), whose HF_TOKEN secret reaches only the
+#   download step, through env. Without it, gated models are skipped with a message.
+#
+# The sets (attack text) stay on the runner; only the JSON summaries are uploaded, and no
+# step prints prompt text.
+name: guard-eval
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - src/aegisx9/guards/**
+      - src/aegisx9/pipeline.py
+      - redteam/eval/**
+      - .github/workflows/guard-eval.yml
+  workflow_dispatch:
+    inputs:
+      models:
+        description: >-
+          Models to score, newline- or comma-separated model_id@revision:label (label = the
+          injection class name or index). Empty = heuristics only.
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guard-eval-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.12"
+  GARAK_VERSION: "0.17.1"
+  TORCH_VERSION: "2.15.0" # CPU build, as in redteam-staging.yml (#184)
+
+jobs:
+  heuristics:
+    name: heuristics vs ADR 0024
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      # The word list ADR 0024 measured with; build_sets.py records its sha256 and warns
+      # if it differs from the pinned one.
+      - name: install the word list
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq wamerican
+      # A tool venv: garak (and its torch) never enter the gateway's or the unit tests'
+      # dependencies. CPU torch first so pip keeps it when it resolves garak.
+      - name: install eval tools
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          python -m venv "${RUNNER_TEMP}/eval"
+          pip="${RUNNER_TEMP}/eval/bin/pip"
+          "$pip" install -q --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}"
+          "$pip" install -q "garak==${GARAK_VERSION}"
+          "$pip" install -q --no-deps -e .
+          if "$pip" list 2>/dev/null | grep -qi '^nvidia-'; then
+            echo "::error::CUDA wheels were installed; the CPU torch pin no longer holds"
+            exit 1
+          fi
+      - name: build the sets
+        run: >-
+          "${RUNNER_TEMP}/eval/bin/python" -m redteam.eval.build_sets
+          --out "${RUNNER_TEMP}/sets"
+      - name: score the heuristics (gate)
+        run: >-
+          mkdir -p "${RUNNER_TEMP}/guard-eval" &&
+          "${RUNNER_TEMP}/eval/bin/python" -m redteam.eval.score run
+          --sets "${RUNNER_TEMP}/sets" --heuristics --gate
+          --out "${RUNNER_TEMP}/guard-eval/summary-heuristics.json"
+          --markdown "${GITHUB_STEP_SUMMARY}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: guard-eval-heuristics
+          path: ${{ runner.temp }}/guard-eval/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  plan:
+    name: plan model jobs
+    if: github.event_name == 'workflow_dispatch' && inputs.models != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      # The input reaches the script through env only, never interpolated into the shell;
+      # score.py validates every spec against model_id@revision:label.
+      - id: plan
+        env:
+          MODELS: ${{ inputs.models }}
+        run: echo "matrix=$(python -m redteam.eval.score plan)" >> "$GITHUB_OUTPUT"
+
+  model:
+    name: classifier ${{ matrix.model.spec }}
+    needs: plan
+    if: needs.plan.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    environment: guard-eval
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        model: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: install the word list
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq wamerican
+      # garak brings transformers and huggingface_hub at the versions it pins against.
+      - name: install eval tools
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          python -m venv "${RUNNER_TEMP}/eval"
+          pip="${RUNNER_TEMP}/eval/bin/pip"
+          "$pip" install -q --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}"
+          "$pip" install -q "garak==${GARAK_VERSION}"
+          "$pip" install -q --no-deps -e .
+          if "$pip" list 2>/dev/null | grep -qi '^nvidia-'; then
+            echo "::error::CUDA wheels were installed; the CPU torch pin no longer holds"
+            exit 1
+          fi
+      - name: build the sets
+        run: >-
+          "${RUNNER_TEMP}/eval/bin/python" -m redteam.eval.build_sets
+          --out "${RUNNER_TEMP}/sets"
+      # The only step that sees HF_TOKEN (an environment secret), and only through env. It
+      # is never echoed; an unset secret is an empty string, which is unset here so the hub
+      # client goes anonymous and a gated model is skipped with a message.
+      - name: download the model
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          MODEL_SPEC: ${{ matrix.model.spec }}
+        run: |
+          [ -n "${HF_TOKEN}" ] || unset HF_TOKEN
+          "${RUNNER_TEMP}/eval/bin/python" -m redteam.eval.score download \
+            --model "${MODEL_SPEC}" --cache-dir "${RUNNER_TEMP}/models"
+      # Report-only: the numbers don't fail the job; only a crash does.
+      - name: score the model and the heuristics
+        env:
+          HF_HUB_OFFLINE: "1"
+          MODEL_SLUG: ${{ matrix.model.slug }}
+        run: >-
+          mkdir -p "${RUNNER_TEMP}/guard-eval" &&
+          "${RUNNER_TEMP}/eval/bin/python" -m redteam.eval.score run
+          --sets "${RUNNER_TEMP}/sets" --heuristics
+          --model-dir "${RUNNER_TEMP}/models/${MODEL_SLUG}"
+          --out "${RUNNER_TEMP}/guard-eval/summary-${MODEL_SLUG}.json"
+          --markdown "${GITHUB_STEP_SUMMARY}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: guard-eval-${{ matrix.model.slug }}
+          path: ${{ runner.temp }}/guard-eval/
+          if-no-files-found: ignore
+          retention-days: 30

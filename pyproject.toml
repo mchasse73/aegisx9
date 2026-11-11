@@ -73,6 +73,7 @@ files = [
   "workspace/image/render_settings.py",
   "workspace/breakglass/bin/handoff-sync",
   "workspace/breakglass/bin/aegisx9-event",
+  "redteam/eval",
 ]
 scripts_are_modules = true
 
@@ -82,4 +83,4 @@ addopts = "-q --cov --cov-report=term-missing --cov-fail-under=85"
 
 [tool.coverage.run]
 branch = true
-source = ["aegisx9", "aegisx9_scanner", "workspace/image"]
+source = ["aegisx9", "aegisx9_scanner", "workspace/image", "redteam/eval"]

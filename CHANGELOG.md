@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 - Staging gateway team `pass-income`: $40 per 30 days, Sonnet 5.5 by default, for a weekly scheduled scout agent. The allocation is now $165 of the $180 cap. Its federated machine identity follows (refs #203).
+- Reproducible guard evaluation, step A of the prompt-injection classifier (refs #198). `redteam/eval/build_sets.py` builds ADR 0024's sets: the target families (promptinject goal hijacking, 525 prompts; LatentInjectionReportFull, 648) and the 7,168-prompt hold-out, from garak 0.17.1's own probe classes, plus the false-positive corpora generated from fixed seeds and the pinned wamerican word list. `redteam/eval/score.py` scores the input guards through the proxy hook, and any Hugging Face classifier at a pinned revision. It splits prompts into 512-token windows with overlap and reports rates at 0.5 to 0.99, "heuristics OR classifier", CPU latency, the resolved revision and the weights' sha256. The new `guard-eval.yml` workflow runs on GitHub-hosted runners. On guard changes it fails on a target-family regression or any false positive. Dispatch also scores the listed models, report-only, in the `guard-eval` environment, whose `HF_TOKEN` reaches only the download step. No prompt text is printed or uploaded.
 
 ### Changed
 - Staging runs v0.6.0 (digest `sha256:12de7225…`, the signed index the 0.6.0 tag points at), so the embedded-instruction and instruction-echo guards are live there (#179, #195).
