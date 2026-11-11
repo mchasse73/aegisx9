@@ -9,6 +9,9 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 - Staging runs v0.6.0 (digest `sha256:12de7225…`, the signed index the 0.6.0 tag points at), so the embedded-instruction and instruction-echo guards are live there (#179, #195).
 
+### Fixed
+- Gateway image: current python:3.12-slim digest, a Debian `apt-get upgrade` in the runtime stage, and `oauthlib` 4.0.1, clearing new HIGH findings in apt, zlib and oauthlib that failed the Trivy check on every PR (#205).
+
 ## [0.6.0] - 2026-11-04
 
 ### Added
