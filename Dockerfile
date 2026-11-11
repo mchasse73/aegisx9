@@ -6,7 +6,7 @@
 # the runtime image, npm stays in the build stage.
 FROM node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS node
 
-FROM python:3.12-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2 AS build
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS build
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /src
 RUN python -m venv /opt/venv
@@ -47,13 +47,17 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && python scripts/image/bake_prisma.py
 RUN chmod -R a+rX /opt/prisma
 
-FROM python:3.12-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 ARG VERSION=0.0.0
 LABEL org.opencontainers.image.title="aegisx9" \
       org.opencontainers.image.description="Secure AI gateway with governance" \
       org.opencontainers.image.source="https://github.com/mchasse73/aegisx9" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${VERSION}"
+# Debian security fixes land here without waiting for a new base digest (#205).
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system --gid 10001 aegisx9 \
  && useradd --system --uid 10001 --gid aegisx9 --no-create-home --shell /usr/sbin/nologin aegisx9
 COPY --from=build /opt/venv /opt/venv
