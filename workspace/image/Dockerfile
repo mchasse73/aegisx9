@@ -16,7 +16,7 @@
 # No gitleaks binary: upstream builds ship with an old Go toolchain and fail the Trivy
 # gate; the prompt hook is regex-only and the gateway's input guard is authoritative.
 
-FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac AS tools
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 AS tools
 ARG NODE_VERSION=24.22.1
 ARG VAULT_VERSION=2.2.1
 # hadolint ignore=DL3008
@@ -41,7 +41,7 @@ RUN set -eu; \
     mkdir -p /opt/tools/bin; \
     unzip -q "${zip}" vault -d /opt/tools/bin
 
-FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 ARG VERSION=0.0.0
 ARG CLAUDE_CODE_VERSION=2.1.306
 # Site values rendered into the managed settings (defaults in image/workspace.env).
@@ -60,13 +60,15 @@ LABEL org.opencontainers.image.title="aegisx9-workspace" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.vendor="AegisX9"
 
-# Runtime packages. No sudo: the package is absent and no sudoers file exists.
+# Runtime packages; `apt-get upgrade` picks up Ubuntu security fixes without waiting for a
+# new base digest (#207). No sudo: the package is absent and no sudoers file exists.
 # bubblewrap + socat back the Claude Code Bash sandbox. openssh-server, rsync and procps
 # (pgrep) are required by the Coder template: its agent starts sshd unprivileged on a
 # loopback port with host keys from the home volume (never generated here), the sync
 # tool connects as `dev`, and pod probes use pgrep. Nothing is started by the image.
 # hadolint ignore=DL3008
 RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       bubblewrap ca-certificates curl git git-lfs jq less locales openssh-client \
       openssh-server procps python3 python3-venv ripgrep rsync socat tini unzip \

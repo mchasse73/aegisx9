@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format follows
 - Staging runs v0.6.0 (digest `sha256:12de7225…`, the signed index the 0.6.0 tag points at), so the embedded-instruction and instruction-echo guards are live there (#179, #195).
 
 ### Fixed
+- Workspace image: current ubuntu:24.04 digest and an `apt-get upgrade` in the runtime stage (apt CVE-2026-109518). The Vault CLI's golang.org/x/net CVE-2026-78661 is accepted until a fixed Vault release ships, with a review by 2026-12-11 (#207).
 - Gateway image: current python:3.12-slim digest, a Debian `apt-get upgrade` in the runtime stage, and `oauthlib` 4.0.1, clearing new HIGH findings in apt, zlib and oauthlib that failed the Trivy check on every PR (#205).
 
 ## [0.6.0] - 2026-11-04
