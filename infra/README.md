@@ -7,7 +7,7 @@ run is checked by the Sentinel policy set in `policies/sentinel/`.
 
 | Root | Workspace | Manages |
 |------|-----------|---------|
-| `staging/` | `aegisx9-staging` | staging namespace, quota, limits, default-deny NetworkPolicy; Vault KV/transit/PKI + policies + Kubernetes auth role; identity-provider OIDC app; GitHub `staging` environment and branch protection on `main`; ARC runner scale set |
+| `staging/` | `aegisx9-staging` | staging namespace, quota, limits, default-deny NetworkPolicy; Vault KV/transit/PKI + policies + Kubernetes auth role; identity-provider OIDC app; GitHub `staging`, `redteam` and `guard-eval` environments and branch protection on `main`; ARC runner scale set |
 | `prod/` | `aegisx9-prod` | the same for production, plus Route 53 records in the aegisx9.com zone (only with an exposure approval) |
 
 The TFE hostname is not in this repository: export `TF_CLOUD_HOSTNAME` (and
@@ -22,4 +22,14 @@ Local checks:
 terraform fmt -check -recursive
 for r in staging prod; do terraform -chdir=$r init -backend=false && terraform -chdir=$r validate; done
 tflint --recursive
+```
+
+**First apply after the `guard-eval` environment was added (#198).** The environment and its
+`main` branch policy were created by hand before they were in Terraform. Import them once
+before the first staging apply, or the apply fails with "already exists". The policy id comes
+from `gh api repos/<owner>/<repo>/environments/guard-eval/deployment-branch-policies`.
+
+```bash
+terraform -chdir=staging import 'module.env.github_repository_environment.guard_eval[0]' '<repo>:guard-eval'
+terraform -chdir=staging import 'module.env.github_repository_environment_deployment_policy.guard_eval_main[0]' '<repo>:guard-eval:<policy-id>'
 ```

@@ -33,16 +33,24 @@ prompt-injection classifiers, against ADR 0024's sets, on GitHub-hosted runners:
 
 `build_sets.py` reads the attack prompts from garak 0.17.1's own probe classes, installed in a
 tool venv inside the workflow only. It generates the false-positive corpora from fixed seeds and
-the wamerican word list (sha256 pinned and recorded). `score.py` writes a JSON summary
-(artifact) and the tables (job summary). Neither prints prompt text.
+the wamerican word list, whose sha256 is pinned. `score.py` writes a JSON summary (artifact) and
+the tables (job summary). Neither prints prompt text. The family and corpus definitions live in
+`eval/common.py`.
 
-**On a pull request** that touches the guards, the pipeline or `eval/`: heuristics only, no
-secrets. The job fails if a target family drops below 100% or any false-positive corpus is hit.
+**On a pull request** that touches the guards, the proxy hook, the pipeline, the promptfoo
+attack files or `eval/`: heuristics only, no environment, no secrets. The job fails if:
+
+- a target family is blocked below 100%, or its prompt count differs from ADR 0024's;
+- any false-positive corpus is hit;
+- the word list's sha256 differs from the pin (the false-positive results are then invalid).
+
+A hold-out family whose count differs is a warning, shown in the job summary; it doesn't fail.
 
 **Manual dispatch** (Actions → guard-eval → Run workflow), input `models`: newline- or
 comma-separated `model_id@revision:label`, where `label` is the injection class's name or
-index. Use a full commit sha as the revision; the summary records the resolved sha and the
-weights' sha256. For example:
+index. A malformed entry fails the plan job. Use a full commit sha as the revision. The summary
+records the resolved sha and the sha256 of every top-level `.safetensors` file. Weights in
+subfolders and pickled `.bin` files are never fetched. For example:
 
 ```
 protectai/deberta-v3-base-prompt-injection-v2@90c9989b1a342275dd0d1a95aad283c04e075671:INJECTION
@@ -50,10 +58,27 @@ meta-llama/Llama-Prompt-Guard-2-86M@a8ded8e697ce7c355e395a0df51f94adb4a2fd27:1
 meta-llama/Llama-Prompt-Guard-2-22M@11614a155199674a0a95e6602d6ab0417b790ed0:1
 ```
 
-Each model runs in its own job in the `guard-eval` environment (main only). Its `HF_TOKEN`
-environment secret reaches only the download step. Without it, gated models (Prompt Guard) are
-skipped with a message. Only safetensors weights are fetched. Model results are report-only.
-Empty `models` runs the heuristics alone.
+The heuristics run once per dispatch. Their job uploads per-prompt verdicts (keyed by
+set/family/index, no text), and each model job reuses them for the "OR heuristics" figures.
+Each model runs in its own job in the `guard-eval` environment (main only; Terraform in
+`infra/modules/aegisx9-env`). Its `HF_TOKEN` environment secret reaches only the download step.
+
+- With no token and a 401/403 answer (a gated model such as Prompt Guard), the model is skipped
+  with a warning.
+- Any other download failure fails the job, naming the exception type and HTTP status:
+  - a bad revision;
+  - a token without access (accept the model's licence for the token's account);
+  - 429 or 5xx.
+
+Latency is reported two ways:
+
+- batched: windows from many prompts, about 32 per batch, with each batch's time divided by its
+  prompts;
+- one prompt at a time: a fixed sample of 200 prompts, which is what a gateway sidecar would
+  see.
+
+Model results are report-only, and a word list that isn't pinned marks their false-positive rows
+"unpinned corpus". Empty `models` runs the heuristics alone.
 
 Locally (no models): `python -m redteam.eval.build_sets --out /tmp/sets` needs garak 0.17.1 in
 the interpreter; then `python -m redteam.eval.score run --sets /tmp/sets --heuristics --gate --out summary.json`.

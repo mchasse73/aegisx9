@@ -6,47 +6,59 @@ Detectors:
   prompt counts as blocked when the hook refuses it.
 - ``HFClassifierDetector``: a Hugging Face sequence classifier at a pinned revision. Each
   prompt is split into windows of the model's context (512 tokens by default) with overlap;
-  its score is the injection probability of its highest-scoring window.
+  its score is the injection probability of its highest-scoring window. Windows from many
+  prompts are batched together (about 32 per batch); a separate sample of prompts scored one
+  at a time gives the latency a gateway sidecar would see.
 
 The summary records block counts and rates per family and corpus, the classifier at several
-thresholds, "heuristics OR classifier", latency, and the model's resolved revision and
-weights sha256. Prompt text is never printed or written to the summary.
+thresholds, "heuristics OR classifier" (from the heuristics job's per-prompt outcomes, so the
+heuristic pass runs once per dispatch), latency, and the model's resolved revision and the
+sha256 of every weights file. Prompt text is never printed or written to the summary.
+
+Gate (``run --gate``, heuristics): every target family 100% blocked, no false positive, the
+word list matches its pin, and every target family has ADR 0024's count. A hold-out count
+that differs is a warning, shown in the summary.
 
 Subcommands:
   plan      turn the dispatch input into a JSON matrix (stdout)
-  download  fetch one model's files at its revision (HF_TOKEN from the environment only)
-  run       score the sets; ``--gate`` fails on an ADR 0024 regression
+  download  fetch one model's top-level files at its revision (HF_TOKEN from env only)
+  run       score the sets
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.metadata
 import json
 import math
 import os
+import random
 import re
 import sys
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from redteam.eval.common import FP, SEED, SET_ORDER, TARGET, package_version
+
 THRESHOLDS = (0.5, 0.8, 0.9, 0.95, 0.99)
-TARGET, HOLDOUT, FP = "target", "holdout", "fp"
-SET_ORDER = (TARGET, HOLDOUT, FP)
 DEFAULT_MAX_LENGTH = 512
 DEFAULT_OVERLAP = 64
+BATCH_WINDOWS = 32
+SINGLE_PROMPT_SAMPLE = 200
 # model_id@revision:label, e.g. org/name@<40-hex commit>:INJECTION (label: name or index).
 _SPEC = re.compile(
     r"^(?P<model>[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*)"
     r"@(?P<revision>[A-Za-z0-9][A-Za-z0-9_.-]*)"
     r":(?P<label>[A-Za-z0-9_.-]+)$"
 )
+# Top-level files a classifier needs; weights only as safetensors (no pickled .bin).
+_MODEL_FILE = re.compile(r"^[^/]+\.(json|model|txt|safetensors)$")
+_GATED = "gated model and no HF_TOKEN in the guard-eval environment"
 
 
 # --------------------------------------------------------------------------- data
@@ -59,13 +71,18 @@ class Prompt:
 
 @dataclass(frozen=True)
 class Outcome:
-    """One prompt's result. ``blocked`` for binary detectors, ``score`` for classifiers."""
+    """One prompt's result. ``blocked`` for binary detectors, ``score`` for classifiers.
+
+    ``seconds`` is the prompt's share of its batch; ``chunk_seconds`` the batch time per
+    window (None: ``seconds`` / ``chunks``).
+    """
 
     blocked: bool = False
     score: float | None = None
     chunks: int = 1
     seconds: float = 0.0
     blocked_by: str | None = None
+    chunk_seconds: float | None = None
 
 
 def load_sets(directory: Path) -> tuple[dict[str, Any], list[Prompt]]:
@@ -183,27 +200,73 @@ class HFClassifierDetector:
         predict: Predict,
         max_length: int = DEFAULT_MAX_LENGTH,
         overlap: int = DEFAULT_OVERLAP,
+        batch_windows: int = BATCH_WINDOWS,
     ) -> None:
         self.name = name
         self._tok = tokenizer
         self._predict = predict
         self._window = max_length - tokenizer.num_special_tokens_to_add(pair=False)
         self._overlap = overlap
+        self._batch_windows = batch_windows
 
-    def evaluate(self, text: str) -> Outcome:
-        started = time.perf_counter()
+    def windows(self, text: str) -> list[list[int]]:
         ids = list(self._tok(text, add_special_tokens=False)["input_ids"])
-        windows = [
+        return [
             self._tok.build_inputs_with_special_tokens(c)
             for c in chunk_ids(ids, self._window, self._overlap)
         ]
+
+    def evaluate(self, text: str) -> Outcome:
+        """One prompt on its own, as the gateway would score a request."""
+        started = time.perf_counter()
+        windows = self.windows(text)
         scores = self._predict(windows)
         return Outcome(
-            blocked=False,
-            score=max(scores),
-            chunks=len(windows),
-            seconds=time.perf_counter() - started,
+            score=max(scores), chunks=len(windows), seconds=time.perf_counter() - started
         )
+
+    def evaluate_many(self, texts: Sequence[str]) -> list[Outcome]:
+        """Score prompts with windows from many prompts in each batch.
+
+        Prompts join a batch until it holds ``batch_windows`` windows (a long prompt can
+        overflow one batch; ``predict`` splits it). Each prompt's score is the max over its
+        own windows; its latency is the batch time divided by the prompts in the batch.
+        """
+        outcomes: list[Outcome] = []
+        group: list[list[list[int]]] = []
+        group_seconds = 0.0
+
+        def flush() -> None:
+            nonlocal group, group_seconds
+            if not group:
+                return
+            flat = [w for ws in group for w in ws]
+            started = time.perf_counter()
+            scores = self._predict(flat)
+            elapsed = group_seconds + time.perf_counter() - started
+            per_prompt = elapsed / len(group)
+            per_chunk = elapsed / len(flat)
+            i = 0
+            for ws in group:
+                outcomes.append(
+                    Outcome(
+                        score=max(scores[i : i + len(ws)]),
+                        chunks=len(ws),
+                        seconds=per_prompt,
+                        chunk_seconds=per_chunk,
+                    )
+                )
+                i += len(ws)
+            group, group_seconds = [], 0.0
+
+        for text in texts:
+            started = time.perf_counter()
+            group.append(self.windows(text))
+            group_seconds += time.perf_counter() - started
+            if sum(len(ws) for ws in group) >= self._batch_windows:
+                flush()
+        flush()
+        return outcomes
 
 
 def resolve_label(id2label: dict[int, str], label: str) -> int:
@@ -217,7 +280,7 @@ def resolve_label(id2label: dict[int, str], label: str) -> int:
 
 
 def load_hf_detector(
-    meta: dict[str, Any], label: str, batch_size: int = 16
+    meta: dict[str, Any], label: str
 ) -> HFClassifierDetector:  # pragma: no cover - needs torch and a downloaded model (CI only)
     import torch  # type: ignore[import-not-found,unused-ignore]
     from transformers import (  # type: ignore[import-not-found,unused-ignore]
@@ -239,8 +302,8 @@ def load_hf_detector(
 
     def predict(windows: list[list[int]]) -> list[float]:
         out: list[float] = []
-        for i in range(0, len(windows), batch_size):
-            batch = windows[i : i + batch_size]
+        for i in range(0, len(windows), BATCH_WINDOWS):
+            batch = windows[i : i + BATCH_WINDOWS]
             width = max(len(w) for w in batch)
             ids = torch.tensor([w + [pad] * (width - len(w)) for w in batch])
             mask = torch.tensor([[1] * len(w) + [0] * (width - len(w)) for w in batch])
@@ -253,15 +316,16 @@ def load_hf_detector(
 
 
 # --------------------------------------------------------------------------- scoring
-def run_detector(
-    detector: Detector, prompts: Sequence[Prompt], progress: Callable[[int], None] | None = None
-) -> list[Outcome]:
-    outcomes = []
-    for i, prompt in enumerate(prompts):
-        outcomes.append(detector.evaluate(prompt.text))
-        if progress is not None and (i + 1) % 10000 == 0:
-            progress(i + 1)
-    return outcomes
+def run_detector(detector: Any, prompts: Sequence[Prompt]) -> list[Outcome]:
+    if hasattr(detector, "evaluate_many"):
+        return list(detector.evaluate_many([p.text for p in prompts]))
+    return [detector.evaluate(p.text) for p in prompts]
+
+
+def single_prompt_sample(n: int, size: int = SINGLE_PROMPT_SAMPLE) -> list[int]:
+    """Deterministic indices for the batch-size-1 latency sample."""
+    rng = random.Random(SEED)  # noqa: S311 - a reproducible sample, not a secret
+    return sorted(rng.sample(range(n), min(size, n)))
 
 
 def tally(prompts: Sequence[Prompt], blocked: Sequence[bool]) -> dict[str, Any]:
@@ -295,7 +359,10 @@ def percentile(values: Sequence[float], p: float) -> float:
 
 def latency(outcomes: Sequence[Outcome]) -> dict[str, Any]:
     per_prompt = [o.seconds * 1000 for o in outcomes]
-    per_chunk = [o.seconds * 1000 / max(o.chunks, 1) for o in outcomes]
+    per_chunk = [
+        (o.chunk_seconds if o.chunk_seconds is not None else o.seconds / max(o.chunks, 1)) * 1000
+        for o in outcomes
+    ]
     chunks = [o.chunks for o in outcomes]
     return {
         "prompts": len(outcomes),
@@ -330,7 +397,8 @@ def classifier_summary(
     prompts: Sequence[Prompt],
     outcomes: Sequence[Outcome],
     meta: dict[str, Any],
-    heuristic: Sequence[Outcome] | None = None,
+    heuristic: Sequence[bool] | None = None,
+    single: Sequence[Outcome] = (),
     thresholds: Sequence[float] = THRESHOLDS,
 ) -> dict[str, Any]:
     scores = [o.score if o.score is not None else 0.0 for o in outcomes]
@@ -339,7 +407,7 @@ def classifier_summary(
         cls = [s >= t for s in scores]
         entry: dict[str, Any] = {"classifier": tally(prompts, cls)}
         if heuristic is not None:
-            combined = [c or h.blocked for c, h in zip(cls, heuristic, strict=True)]
+            combined = [c or h for c, h in zip(cls, heuristic, strict=True)]
             entry["combined"] = tally(prompts, combined)
         by_threshold[f"{t:g}"] = entry
     keys = (
@@ -349,27 +417,83 @@ def classifier_summary(
         "label",
         "label_index",
         "labels",
-        "weights_file",
-        "weights_sha256",
+        "weights",
     )
     return {
         "kind": "classifier",
         "name": meta.get("model_id", "classifier"),
         **{k: meta.get(k) for k in keys},
         "thresholds": by_threshold,
-        "latency": latency(outcomes),
+        "latency": {"batched": latency(outcomes), "single_prompt": latency(single)},
     }
 
 
-def check_gate(manifest: dict[str, Any], heuristic: dict[str, Any]) -> list[str]:
-    """ADR 0024's bar for the heuristics: every target family 100%, no false positive."""
-    failures = list(manifest.get("count_mismatches", []))
+# --------------------------------------------------------------------------- heuristic outcomes
+def _family_hashes(manifest: dict[str, Any]) -> dict[str, str]:
+    return {
+        f"{s['set']}/{name}": s["sha256"]
+        for group in ("attack_families", "fp_corpora")
+        for name, s in manifest.get(group, {}).items()
+    }
+
+
+def outcomes_record(
+    manifest: dict[str, Any], prompts: Sequence[Prompt], blocked: Sequence[bool]
+) -> dict[str, Any]:
+    """Per-prompt verdicts keyed by set/family and index within it; no text."""
+    hashes = _family_hashes(manifest)
+    families: dict[str, dict[str, Any]] = {}
+    for prompt, b in zip(prompts, blocked, strict=True):
+        key = f"{prompt.set}/{prompt.family}"
+        entry = families.setdefault(key, {"sha256": hashes.get(key), "blocked": []})
+        entry["blocked"].append(int(b))
+    return {"schema": 1, "kind": "heuristic_outcomes", "families": families}
+
+
+def outcomes_for(
+    record: dict[str, Any], manifest: dict[str, Any], prompts: Sequence[Prompt]
+) -> list[bool]:
+    """Map a heuristics job's record back onto these prompts, refusing different sets."""
+    hashes = _family_hashes(manifest)
+    families = record["families"]
+    index: dict[str, int] = defaultdict(int)
+    out = []
+    for prompt in prompts:
+        key = f"{prompt.set}/{prompt.family}"
+        entry = families.get(key)
+        if entry is None or entry["sha256"] != hashes.get(key):
+            raise ValueError(f"heuristic outcomes were computed on different sets ({key})")
+        out.append(bool(entry["blocked"][index[key]]))
+        index[key] += 1
+    for key, entry in families.items():
+        if index[key] != len(entry["blocked"]):
+            raise ValueError(f"heuristic outcomes were computed on different sets ({key})")
+    return out
+
+
+# --------------------------------------------------------------------------- gate
+def check_gate(manifest: dict[str, Any], heuristic: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """ADR 0024's bar for the heuristics: (failures, warnings).
+
+    Fails: a target family below 100% or with a count other than ADR 0024's, any false
+    positive, or a word list that isn't the pinned one (the FP results are then invalid).
+    Warns: a hold-out family whose count differs.
+    """
+    failures: list[str] = []
+    warnings: list[str] = []
+    if not manifest.get("words", {}).get("match", False):
+        failures.append(
+            "the word list's sha256 differs from the pin: false-positive results are invalid"
+        )
+    for m in manifest.get("count_mismatches", []):
+        text = f"{m['set']} {m['family']}: {m['n']} prompts, ADR 0024 has {m['expected']}"
+        (failures if m["set"] == TARGET else warnings).append(text)
     for name, row in sorted(heuristic["families"].items()):
         if row["set"] == TARGET and row["blocked"] < row["n"]:
             failures.append(f"target {name}: {row['blocked']}/{row['n']} blocked, need all")
         if row["set"] == FP and row["blocked"]:
             failures.append(f"false positives in {name}: {row['blocked']}/{row['n']}")
-    return failures
+    return failures, warnings
 
 
 # --------------------------------------------------------------------------- reporting
@@ -380,90 +504,90 @@ def _pct(row: dict[str, Any]) -> str:
 def _families(summary: dict[str, Any]) -> list[tuple[str, str]]:
     rows = summary["heuristics"]["families"] if summary.get("heuristics") else {}
     if not rows and summary["classifiers"]:
-        rows = next(iter(summary["classifiers"][0]["thresholds"].values()))["classifier"][
-            "families"
-        ]
-    return sorted(
-        ((r["set"], f) for f, r in rows.items()), key=lambda x: (SET_ORDER.index(x[0]), x[1])
-    )
+        first = next(iter(summary["classifiers"][0]["thresholds"].values()))
+        rows = first["classifier"]["families"]
+    pairs = [(r["set"], f) for f, r in rows.items()]
+    return sorted(pairs, key=lambda x: (SET_ORDER.index(x[0]), x[1]))
+
+
+def _set_label(s: str, pinned: bool) -> str:
+    return "fp (unpinned corpus)" if s == FP and not pinned else s
 
 
 def render_markdown(summary: dict[str, Any]) -> str:
     """Tables of counts and rates (family names only, never prompt text)."""
     lines = ["## Guard evaluation", ""]
     sets = summary["sets"]
+    words = sets.get("words", {})
+    pinned = bool(words.get("match"))
     lines.append(
         f"garak {sets.get('garak_version')}, word list sha256 "
-        f"`{str(sets.get('words', {}).get('sha256', ''))[:12]}` "
-        f"(pinned: {sets.get('words', {}).get('match')})"
+        f"`{str(words.get('sha256', ''))[:12]}` (pinned: {pinned})"
     )
+    if not pinned:
+        lines.append("\n**Unpinned corpus:** the word list differs from the pin, so the")
+        lines.append("false-positive results are invalid.")
     for m in sets.get("count_mismatches", []):
-        lines.append(f"- count differs from ADR 0024: {m}")
+        lines.append(f"- {m['set']} {m['family']}: {m['n']} prompts, ADR 0024 has {m['expected']}")
     families = _families(summary)
     h = summary.get("heuristics")
     if h:
-        lines += [
-            "",
-            "### Heuristics (input guards)",
-            "",
-            "| set | family | blocked |",
-            "|---|---|---|",
-        ]
+        lines += ["", "### Heuristics (input guards)", "", "| set | family | blocked |"]
+        lines.append("|---|---|---|")
         for s, f in families:
-            lines.append(f"| {s} | {f} | {_pct(h['families'][f])} |")
+            lines.append(f"| {_set_label(s, pinned)} | {f} | {_pct(h['families'][f])} |")
         for s in SET_ORDER:
             if s in h["sets"]:
-                lines.append(f"| **{s}** | **all** | **{_pct(h['sets'][s])}** |")
+                lines.append(
+                    f"| **{_set_label(s, pinned)}** | **all** | **{_pct(h['sets'][s])}** |"
+                )
         lat = h["latency"]["per_prompt_ms"]
         lines.append(f"\nper-prompt latency p50 {lat['p50']} ms, p95 {lat['p95']} ms")
     for c in summary["classifiers"]:
-        head = " | ".join(f"≥{t}" for t in c["thresholds"])
-        lines += [
-            "",
-            f"### {c['model_id']} @ `{str(c['resolved_revision'])[:12]}` (label {c['label']})",
-            "",
-            f"weights sha256 `{str(c['weights_sha256'])[:12]}`",
-            "",
-            f"| set | family | {head} | OR heuristics ≥0.9 |",
-            "|---|---|" + "---|" * (len(c["thresholds"]) + 1),
-        ]
-        for s, f in families:
-            cells = [_pct(v["classifier"]["families"][f]) for v in c["thresholds"].values()]
-            combined = c["thresholds"].get("0.9", {}).get("combined")
-            cells.append(_pct(combined["families"][f]) if combined else "-")
-            lines.append(f"| {s} | {f} | " + " | ".join(cells) + " |")
-        for s in SET_ORDER:
-            cells = [
-                _pct(v["classifier"]["sets"][s])
-                for v in c["thresholds"].values()
-                if s in v["classifier"]["sets"]
-            ]
-            if cells:
-                combined = c["thresholds"].get("0.9", {}).get("combined")
-                cells.append(_pct(combined["sets"][s]) if combined else "-")
-                lines.append(
-                    f"| **{s}** | **all** | " + " | ".join(f"**{x}**" for x in cells) + " |"
-                )
-        lat = c["latency"]
-        lines.append(
-            f"\nlatency per prompt p50 {lat['per_prompt_ms']['p50']} ms, "
-            f"p95 {lat['per_prompt_ms']['p95']} ms; per chunk p50 {lat['per_chunk_ms']['p50']} ms, "
-            f"p95 {lat['per_chunk_ms']['p95']} ms; {lat['chunks']} chunks, at most "
-            f"{lat['max_chunks']} per prompt"
-        )
+        lines += _classifier_lines(c, families, pinned)
     for s in summary.get("skipped", []):
         lines.append(f"\n- skipped {s['model']}: {s['reason']}")
     return "\n".join(lines) + "\n"
 
 
-def _versions(dists: Iterable[str]) -> dict[str, str | None]:
-    out: dict[str, str | None] = {}
-    for d in dists:
-        try:
-            out[d] = importlib.metadata.version(d)
-        except importlib.metadata.PackageNotFoundError:
-            out[d] = None
-    return out
+def _classifier_lines(
+    c: dict[str, Any], families: list[tuple[str, str]], pinned: bool
+) -> list[str]:
+    head = " | ".join(f"≥{t}" for t in c["thresholds"])
+    weights = ", ".join(f"{w['file']} `{w['sha256'][:12]}`" for w in c.get("weights") or [])
+    lines = [
+        "",
+        f"### {c['model_id']} @ `{str(c['resolved_revision'])[:12]}` (label {c['label']})",
+        "",
+        f"weights: {weights or '-'}",
+        "",
+        f"| set | family | {head} | OR heuristics ≥0.9 |",
+        "|---|---|" + "---|" * (len(c["thresholds"]) + 1),
+    ]
+    combined = c["thresholds"].get("0.9", {}).get("combined")
+    for s, f in families:
+        cells = [_pct(v["classifier"]["families"][f]) for v in c["thresholds"].values()]
+        cells.append(_pct(combined["families"][f]) if combined else "-")
+        lines.append(f"| {_set_label(s, pinned)} | {f} | " + " | ".join(cells) + " |")
+    for s in SET_ORDER:
+        cells = [
+            _pct(v["classifier"]["sets"][s])
+            for v in c["thresholds"].values()
+            if s in v["classifier"]["sets"]
+        ]
+        if cells:
+            cells.append(_pct(combined["sets"][s]) if combined else "-")
+            bold = " | ".join(f"**{x}**" for x in cells)
+            lines.append(f"| **{_set_label(s, pinned)}** | **all** | {bold} |")
+    for kind, title in (("batched", "batched"), ("single_prompt", "one prompt at a time")):
+        lat = c["latency"][kind]
+        lines.append(
+            f"\nlatency, {title} ({lat['prompts']} prompts): per prompt p50 "
+            f"{lat['per_prompt_ms']['p50']} ms, p95 {lat['per_prompt_ms']['p95']} ms; per chunk "
+            f"p50 {lat['per_chunk_ms']['p50']} ms, p95 {lat['per_chunk_ms']['p95']} ms; "
+            f"at most {lat['max_chunks']} chunks per prompt"
+        )
+    return lines
 
 
 def sha256_file(path: Path) -> str:
@@ -472,6 +596,84 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: fh.read(1 << 20), b""):
             h.update(block)
     return h.hexdigest()
+
+
+# --------------------------------------------------------------------------- download
+@dataclass(frozen=True)
+class Hub:
+    """The three Hugging Face Hub calls the download needs (injectable for tests)."""
+
+    model_info: Callable[..., Any]
+    list_files: Callable[..., list[str]]
+    fetch: Callable[..., str]
+
+
+def default_hub() -> Hub:  # pragma: no cover - needs huggingface_hub (CI only)
+    from huggingface_hub import (  # type: ignore[import-not-found,unused-ignore]
+        HfApi,
+        hf_hub_download,
+    )
+
+    api = HfApi()
+    return Hub(api.model_info, api.list_repo_files, hf_hub_download)
+
+
+def model_files(files: Sequence[str]) -> list[str]:
+    """Top-level config, tokenizer and safetensors files only, sorted."""
+    return sorted(f for f in files if _MODEL_FILE.match(f))
+
+
+def http_status(e: BaseException) -> int | None:
+    code = getattr(getattr(e, "response", None), "status_code", None)
+    return code if isinstance(code, int) else None
+
+
+def download(spec: ModelSpec, cache_dir: Path, hub: Hub, has_token: bool) -> dict[str, Any]:
+    """Fetch exact top-level files at the resolved revision; hash every weights file.
+
+    Status ``skipped`` only when there is no token and the hub answers 401/403 (gated).
+    Anything else that fails is ``error``. Only the exception type and HTTP status are kept.
+    """
+    meta: dict[str, Any] = {
+        "model_id": spec.model_id,
+        "revision": spec.revision,
+        "label": spec.label,
+    }
+    try:
+        sha = str(hub.model_info(spec.model_id, revision=spec.revision).sha)
+        meta["resolved_revision"] = sha
+        files = model_files(hub.list_files(spec.model_id, revision=sha))
+        weights = [f for f in files if f.endswith(".safetensors")]
+        if not weights:
+            meta.update(status="error", reason="no top-level safetensors weights at this revision")
+            return meta
+        paths = [
+            hub.fetch(spec.model_id, f, revision=sha, cache_dir=str(cache_dir / "hub"))
+            for f in files
+        ]
+    except Exception as e:  # never str(e): messages carry URLs (security rule 4)
+        name, status = type(e).__name__, http_status(e)
+        where = f"{name}, HTTP {status}" if status else name
+        gated = status in (401, 403) or name == "GatedRepoError"
+        if gated and not has_token:
+            meta.update(status="skipped", reason=_GATED)
+        elif gated:
+            meta.update(
+                status="error",
+                reason=f"token lacks access ({where}): accept the model licence "
+                "on Hugging Face for the token's account",
+            )
+        else:
+            meta.update(status="error", reason=f"download failed ({where})")
+        return meta
+    local = Path(paths[0]).parent
+    meta.update(
+        status="ok",
+        local_path=str(local),
+        files=files,
+        weights=[{"file": f, "sha256": sha256_file(local / f)} for f in weights],
+    )
+    return meta
 
 
 # --------------------------------------------------------------------------- commands
@@ -485,58 +687,19 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
-def download(spec: ModelSpec, cache_dir: Path) -> dict[str, Any]:  # pragma: no cover - network
-    """Fetch config, tokenizer and safetensors weights only (no pickled ``.bin`` files)."""
-    from huggingface_hub import HfApi, snapshot_download  # type: ignore[import-not-found,unused-ignore]
-
-    meta: dict[str, Any] = {
-        "model_id": spec.model_id,
-        "revision": spec.revision,
-        "label": spec.label,
-    }
-    has_token = bool(os.environ.get("HF_TOKEN"))
-    try:
-        info = HfApi().model_info(spec.model_id, revision=spec.revision)
-        meta["resolved_revision"] = info.sha
-        path = snapshot_download(
-            spec.model_id,
-            revision=info.sha,
-            cache_dir=str(cache_dir / "hub"),
-            allow_patterns=["*.json", "*.safetensors", "*.model", "*.txt"],
-        )
-    except Exception as e:  # print only the type: messages can carry URLs (rule 4)
-        name = type(e).__name__
-        gated = name in {"GatedRepoError", "RepositoryNotFoundError", "HfHubHTTPError"}
-        meta["status"] = "skipped" if gated and not has_token else "error"
-        meta["reason"] = (
-            "gated model and no HF_TOKEN in the guard-eval environment"
-            if meta["status"] == "skipped"
-            else f"download failed: {name}"
-        )
-        return meta
-    weights = sorted(Path(path).glob("*.safetensors"))
-    if not weights:
-        meta.update(status="error", reason="no safetensors weights at this revision")
-        return meta
-    meta.update(
-        status="ok",
-        local_path=path,
-        weights_file=weights[0].name,
-        weights_sha256=sha256_file(weights[0]),
-    )
-    return meta
-
-
-def cmd_download(args: argparse.Namespace) -> int:  # pragma: no cover - network
+def cmd_download(args: argparse.Namespace, hub: Hub | None = None) -> int:
     spec = parse_spec(args.model)
-    meta = download(spec, args.cache_dir)
+    meta = download(spec, args.cache_dir, hub or default_hub(), bool(os.environ.get("HF_TOKEN")))
     target = args.cache_dir / spec.slug
     target.mkdir(parents=True, exist_ok=True)
     (target / "download.json").write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
+    if meta["status"] == "skipped":
+        print(f"::warning::{spec.model_id}: skipped, {meta['reason']}")
+        return 0
     if meta["status"] != "ok":
-        print(f"::warning::{spec.model_id}: {meta['reason']}")
-    else:
-        print(f"{spec.model_id}: revision {meta['resolved_revision']}, {meta['weights_file']}")
+        print(f"::error::{spec.model_id}: {meta['reason']}")
+        return 1
+    print(f"{spec.model_id}: revision {meta['resolved_revision']}, {len(meta['weights'])} weights")
     return 0
 
 
@@ -544,28 +707,35 @@ def score(
     sets_dir: Path,
     heuristics: bool,
     models: Sequence[dict[str, Any]] = (),
-    detector_factory: Callable[[dict[str, Any]], Detector] | None = None,
+    detector_factory: Callable[[dict[str, Any]], Any] | None = None,
+    heuristic_record: dict[str, Any] | None = None,
     log: Callable[[str], None] = print,
-) -> dict[str, Any]:
-    """Run every detector over the sets; return the summary."""
+) -> tuple[dict[str, Any], list[Prompt], list[Outcome] | None]:
+    """Run the detectors over the sets; return the summary, prompts and heuristic outcomes."""
     manifest, prompts = load_sets(sets_dir)
     summary: dict[str, Any] = {
-        "schema": 1,
+        "schema": 2,
         "sets": manifest,
         "environment": {
             "python": sys.version.split()[0],
             "cpu_count": os.cpu_count(),
-            "packages": _versions(["torch", "transformers", "huggingface-hub", "garak"]),
+            "packages": {
+                d: package_version(d) for d in ("torch", "transformers", "huggingface-hub", "garak")
+            },
         },
         "heuristics": None,
         "classifiers": [],
         "skipped": [],
     }
     heuristic_outcomes = None
+    heuristic_blocked: list[bool] | None = None
     if heuristics:
         log(f"heuristics: {len(prompts)} prompts")
         heuristic_outcomes = run_detector(HeuristicDetector(), prompts)
         summary["heuristics"] = heuristic_summary(prompts, heuristic_outcomes)
+        heuristic_blocked = [o.blocked for o in heuristic_outcomes]
+    elif heuristic_record is not None:
+        heuristic_blocked = outcomes_for(heuristic_record, manifest, prompts)
     for meta in models:
         if meta.get("status") != "ok":
             summary["skipped"].append({"model": meta.get("model_id"), "reason": meta.get("reason")})
@@ -573,26 +743,45 @@ def score(
         factory = detector_factory or (lambda m: load_hf_detector(m, m["label"]))
         detector = factory(meta)
         log(f"{meta['model_id']}: {len(prompts)} prompts")
-        outcomes = run_detector(detector, prompts, lambda i: log(f"  {i} prompts scored"))
+        outcomes = run_detector(detector, prompts)
+        sample = single_prompt_sample(len(prompts))
+        log(f"{meta['model_id']}: {len(sample)} prompts one at a time")
+        single = [detector.evaluate(prompts[i].text) for i in sample]
         summary["classifiers"].append(
-            classifier_summary(prompts, outcomes, meta, heuristic_outcomes)
+            classifier_summary(prompts, outcomes, meta, heuristic_blocked, single)
         )
-    return summary
+    return summary, prompts, heuristic_outcomes
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    models = []
-    for d in args.model_dir or []:
-        models.append(json.loads((Path(d) / "download.json").read_text(encoding="utf-8")))
-    summary = score(args.sets, args.heuristics, models)
-    failures = check_gate(summary["sets"], summary["heuristics"]) if args.gate else []
-    summary["gate"] = {"checked": bool(args.gate), "failures": failures}
+    models = [
+        json.loads((Path(d) / "download.json").read_text(encoding="utf-8"))
+        for d in args.model_dir or []
+    ]
+    record = None
+    if args.heuristic_outcomes:
+        record = json.loads(Path(args.heuristic_outcomes).read_text(encoding="utf-8"))
+    summary, prompts, heuristic_outcomes = score(args.sets, args.heuristics, models, None, record)
+    failures: list[str] = []
+    warnings = [
+        f"{m['set']} {m['family']}: {m['n']} prompts, ADR 0024 has {m['expected']}"
+        for m in summary["sets"].get("count_mismatches", [])
+        if m["set"] != TARGET
+    ]
+    if args.gate:
+        failures, warnings = check_gate(summary["sets"], summary["heuristics"])
+    summary["gate"] = {"checked": bool(args.gate), "failures": failures, "warnings": warnings}
     args.out.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    if args.outcomes_out and heuristic_outcomes is not None:
+        record = outcomes_record(summary["sets"], prompts, [o.blocked for o in heuristic_outcomes])
+        Path(args.outcomes_out).write_text(json.dumps(record, separators=(",", ":")) + "\n")
     table = render_markdown(summary)
     print(table)
     if args.markdown:
         with Path(args.markdown).open("a", encoding="utf-8") as fh:
             fh.write(table)
+    for w in warnings:
+        print(f"::warning::count differs from ADR 0024: {w}")
     for f in failures:
         print(f"::error::ADR 0024 regression: {f}")
     return 1 if failures else 0
@@ -610,7 +799,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--sets", type=Path, required=True)
     run.add_argument("--out", type=Path, required=True)
     run.add_argument("--markdown", help="append the tables here (e.g. $GITHUB_STEP_SUMMARY)")
-    run.add_argument("--heuristics", action="store_true")
+    run.add_argument("--heuristics", action="store_true", help="run the heuristic pass")
+    run.add_argument("--outcomes-out", help="write per-prompt heuristic verdicts (no text)")
+    run.add_argument("--heuristic-outcomes", help="the heuristics job's verdicts, for OR figures")
     run.add_argument("--model-dir", action="append", help="a download dir (repeatable)")
     run.add_argument("--gate", action="store_true", help="fail on an ADR 0024 regression")
     run.set_defaults(func=cmd_run)

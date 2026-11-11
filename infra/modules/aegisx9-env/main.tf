@@ -252,6 +252,29 @@ resource "github_repository_environment_deployment_policy" "redteam_main" {
   branch_pattern = "main"
 }
 
+# guard-eval.yml's model jobs (#198): its HF_TOKEN environment secret reaches only the model
+# download step. The environment was created by hand before this resource existed, so the
+# first apply needs `terraform import` (see infra/README.md).
+resource "github_repository_environment" "guard_eval" {
+  count               = var.environment == "staging" ? 1 : 0
+  repository          = data.github_repository.this.name
+  environment         = "guard-eval"
+  prevent_self_review = false
+  can_admins_bypass   = false
+  # Exactly main, so a pull request branch can never reach the token.
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+resource "github_repository_environment_deployment_policy" "guard_eval_main" {
+  count          = var.environment == "staging" ? 1 : 0
+  repository     = data.github_repository.this.name
+  environment    = github_repository_environment.guard_eval[0].environment
+  branch_pattern = "main"
+}
+
 resource "github_branch_protection" "main" {
   count                           = var.manage_branch_protection ? 1 : 0
   repository_id                   = data.github_repository.this.node_id

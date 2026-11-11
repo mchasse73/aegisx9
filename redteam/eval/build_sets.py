@@ -8,10 +8,10 @@ digests) is generated from a seeded RNG, never written as literals.
 
 Output: ``<out>/prompts.jsonl`` (one ``{"set", "family", "text"}`` per line) and
 ``<out>/manifest.json`` (counts, expected counts, per-family sha256, pins). The JSONL holds
-attack text, so it stays on the runner and is never uploaded or printed.
+attack text, so it stays on the runner and is never uploaded or printed. Count mismatches
+and an unpinned word list are recorded in the manifest; ``score.py --gate`` decides.
 
 Usage: python -m redteam.eval.build_sets --out DIR [--words PATH] [--words-sha256 HEX]
-       [--strict-counts]
 """
 
 from __future__ import annotations
@@ -19,88 +19,31 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
-import importlib.metadata
 import json
 import random
 import sys
 import uuid
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from redteam.eval.common import (
+    ATTACK_FAMILIES,
+    FP,
+    FP_CORPORA,
+    GARAK_VERSION,
+    SEED,
+    AttackFamily,
+    package_version,
+    texts_sha256,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
-GARAK_VERSION = "0.17.1"
-SEED = 7731
 DEFAULT_WORDS = Path("/usr/share/dict/words")
 # wamerican 2020.12.07-2 (Ubuntu 24.04): 104,334 lines, the list ADR 0024 measured with.
 WORDS_SHA256 = "9f513f1ceadb6a01c5485b7dbdfd5118dc66cd70b59cae2851292112d4066a32"
-
-TARGET, HOLDOUT, FP = "target", "holdout", "fp"
-
-
-@dataclass(frozen=True)
-class AttackFamily:
-    """One attack family: where its prompts come from and how many ADR 0024 measured."""
-
-    name: str
-    set: str
-    expected: int
-    probes: tuple[str, ...] = ()  # garak plugin names under probes.
-    builder: str = ""  # a named builder for families that aren't one probe class
-
-
-ATTACK_FAMILIES: tuple[AttackFamily, ...] = (
-    # Target: the gate's two probes, which the heuristics were tuned on.
-    AttackFamily(
-        "promptinject_hijack",
-        TARGET,
-        525,
-        probes=(
-            "promptinject.HijackHateHumansFull",
-            "promptinject.HijackKillHumansFull",
-            "promptinject.HijackLongPromptFull",
-        ),
-    ),
-    AttackFamily(
-        "LatentInjectionReportFull",
-        TARGET,
-        648,
-        probes=("latentinjection.LatentInjectionReportFull",),
-    ),
-    # Hold-out: never tuned against; 7,168 prompts in all.
-    AttackFamily(
-        "FactSnippetEiffel",
-        HOLDOUT,
-        2400,
-        probes=("latentinjection.LatentInjectionFactSnippetEiffelFull",),
-    ),
-    AttackFamily(
-        "FactSnippetLegal",
-        HOLDOUT,
-        1080,
-        probes=("latentinjection.LatentInjectionFactSnippetLegalFull",),
-    ),
-    AttackFamily(
-        "TranslationEnFr",
-        HOLDOUT,
-        270,
-        probes=("latentinjection.LatentInjectionTranslationEnFrFull",),
-    ),
-    AttackFamily(
-        "TranslationEnZh",
-        HOLDOUT,
-        270,
-        probes=("latentinjection.LatentInjectionTranslationEnZhFull",),
-    ),
-    AttackFamily("Whois", HOLDOUT, 168, probes=("latentinjection.LatentWhois",)),
-    AttackFamily("WhoisSnippet", HOLDOUT, 400, probes=("latentinjection.LatentWhoisSnippetFull",)),
-    AttackFamily("Resume", HOLDOUT, 2400, probes=("latentinjection.LatentInjectionResumeFull",)),
-    AttackFamily("promptinject_prompt_leaking", HOLDOUT, 175, builder="prompt_leaking"),
-    AttackFamily("promptfoo_injection", HOLDOUT, 5, builder="promptfoo_injection"),
-)
 
 
 # --------------------------------------------------------------------------- attack sets
@@ -141,7 +84,6 @@ class GarakSource:  # pragma: no cover - runs only in the eval workflow, where g
 
         _config.load_base_config()
         _config.run.seed = SEED
-        self._config = _config
 
     def probe_prompts(self, probe: str) -> list[str]:
         from garak import _plugins  # type: ignore[import-not-found,attr-defined,unused-ignore]
@@ -296,7 +238,7 @@ def fp_corpora(words: Sequence[str], benign: Sequence[str]) -> dict[str, list[st
     # Seeded on purpose: the corpora must be reproducible, and nothing here is a secret.
     sentences = random.Random(1)  # noqa: S311
     orders = random.Random(2)  # noqa: S311
-    return {
+    corpora = {
         "dictionary_words": list(words),
         "random_sentences": [" ".join(sentences.sample(words, 12)) for _ in range(5000)],
         "order_numbers": [f"order {orders.randrange(10**5, 10**9)} shipped" for _ in range(20000)],
@@ -308,6 +250,8 @@ def fp_corpora(words: Sequence[str], benign: Sequence[str]) -> dict[str, list[st
         "emails_asking_reply": list(EMAILS),
         "promptfoo_benign": list(benign),
     }
+    assert tuple(corpora) == FP_CORPORA  # noqa: S101 - one list of corpus names
+    return corpora
 
 
 def read_words(path: Path) -> tuple[list[str], str]:
@@ -316,22 +260,7 @@ def read_words(path: Path) -> tuple[list[str], str]:
     return words, hashlib.sha256(raw).hexdigest()
 
 
-def texts_sha256(texts: Iterable[str]) -> str:
-    h = hashlib.sha256()
-    for t in texts:
-        h.update(t.encode("utf-8"))
-        h.update(b"\0")
-    return h.hexdigest()
-
-
 # --------------------------------------------------------------------------- driver
-def _version(dist: str) -> str | None:
-    try:
-        return importlib.metadata.version(dist)
-    except importlib.metadata.PackageNotFoundError:
-        return None
-
-
 def build(
     out: Path,
     source: Any,
@@ -349,14 +278,14 @@ def build(
         fp_stats[name] = {"set": FP, "n": len(texts), "sha256": texts_sha256(texts)}
 
     mismatches = [
-        f"{name}: {s['n']} prompts, expected {s['expected']}"
+        {"family": name, "set": s["set"], "n": s["n"], "expected": s["expected"]}
         for name, s in attack_stats.items()
         if s["n"] != s["expected"]
     ]
     manifest: dict[str, Any] = {
-        "schema": 1,
+        "schema": 2,
         "seed": SEED,
-        "garak_version": _version("garak"),
+        "garak_version": package_version("garak"),
         "garak_version_expected": GARAK_VERSION,
         "words": {
             "path": str(words_path),
@@ -381,7 +310,7 @@ def build(
     if not manifest["words"]["match"]:
         log("::warning::the word list differs from the pinned wamerican list (sha256 recorded)")
     for m in mismatches:
-        log(f"::warning::count differs from ADR 0024: {m}")
+        log(f"::warning::{m['set']} {m['family']}: {m['n']} prompts, ADR 0024 has {m['expected']}")
     return manifest
 
 
@@ -390,19 +319,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--words", type=Path, default=DEFAULT_WORDS)
     parser.add_argument("--words-sha256", default=WORDS_SHA256)
-    parser.add_argument(
-        "--strict-counts", action="store_true", help="fail if a family's count differs from ADR"
-    )
     args = parser.parse_args(argv)
     try:
-        source = GarakSource()
-        manifest = build(args.out, source, args.words, args.words_sha256)
+        build(args.out, GarakSource(), args.words, args.words_sha256)
     except Exception as e:  # print only the type (security rule 4)
         print(f"::error::building the sets failed: {type(e).__name__}", file=sys.stderr)
         return 2
-    if args.strict_counts and manifest["count_mismatches"]:
-        print("::error::attack set counts differ from ADR 0024", file=sys.stderr)
-        return 1
     return 0
 
 
