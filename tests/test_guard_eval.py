@@ -894,11 +894,67 @@ def test_load_detector_dispatches_on_runtime(
     monkeypatch.setattr(
         score, "load_onnx_detector", lambda m, label, d: seen.append(("onnx", label, d))
     )
+    monkeypatch.setattr(score, "check_onnx_size", lambda m: seen.append(("size",)))
     score.load_detector({"label": "X"}, "torch-fp32")
     score.load_detector({"label": "X"}, "onnx-int8", tmp_path)
-    score.load_detector({"label": "X"}, "onnx-int8")
-    assert seen[:2] == [("torch", "X"), ("onnx", "X", tmp_path)]
-    assert seen[2][0] == "onnx" and isinstance(seen[2][2], Path)
+    assert seen == [("torch", "X"), ("size",), ("onnx", "X", tmp_path)]  # size first
+    with pytest.raises(ValueError):
+        score.load_detector({"label": "X"}, "onnx-int8")  # the caller owns the work dir
+
+
+def test_check_export_fails_before_quantising(capsys: pytest.CaptureFixture[str]) -> None:
+    assert score.check_export("org/m", [0.5, 0.9], [0.5004, 0.9]) == pytest.approx(4e-4)
+    assert capsys.readouterr().out == ""
+    with pytest.raises(score.OnnxExportError):
+        score.check_export("org/m", [0.5, 0.9], [0.5, 0.95])
+    out = capsys.readouterr().out
+    assert out.startswith("::error::org/m: the fp32 ONNX export differs from torch by 5.00e-02")
+    assert "tolerance 0.001" in out and "not quantising" in out
+    assert score.check_export("org/m", [], []) == 0.0
+
+
+def _safetensors(path: Path, tensors: dict[str, Any]) -> None:
+    header = json.dumps(tensors).encode()
+    path.write_bytes(len(header).to_bytes(8, "little") + header)
+
+
+def test_fp32_export_size_from_safetensors_headers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _safetensors(
+        tmp_path / "a.safetensors",
+        {
+            "__metadata__": {"format": "pt"},
+            "w": {"dtype": "F16", "shape": [10, 10], "data_offsets": [0, 200]},  # fp16 -> fp32
+            "ids": {"dtype": "I64", "shape": [3], "data_offsets": [200, 224]},
+        },
+    )
+    _safetensors(tmp_path / "b.safetensors", {"x": {"dtype": "BF16", "shape": [], "offsets": 0}})
+    assert score.fp32_export_bytes(tmp_path, ["a.safetensors", "b.safetensors"]) == 400 + 24 + 4
+    meta = {
+        "model_id": "org/big",
+        "local_path": str(tmp_path),
+        "weights": [{"file": "a.safetensors", "sha256": "0" * 64}],
+    }
+    assert score.check_onnx_size(meta) == 424
+    monkeypatch.setattr(score, "ONNX_MAX_SOURCE_BYTES", 100)
+    with pytest.raises(score.OnnxExportError):
+        score.check_onnx_size(meta)
+    out = capsys.readouterr().out
+    assert out.startswith("::error::org/big:") and "limited to 2 GB (protobuf)" in out
+    (tmp_path / "bad.safetensors").write_bytes(b"\0" * 8)
+    with pytest.raises(ValueError):
+        score.fp32_export_bytes(tmp_path, ["bad.safetensors"])
+
+
+def test_cpu_model(tmp_path: Path) -> None:
+    x86 = tmp_path / "x86"
+    x86.write_text("processor\t: 0\nmodel name\t: Example CPU 9000\nprocessor\t: 1\n")
+    assert score.cpu_model(x86) == "Example CPU 9000"
+    arm = tmp_path / "arm"
+    arm.write_text("processor\t: 0\nBogoMIPS\t: 108.00\nmodel name\t:\n")
+    assert score.cpu_model(arm) == "unknown"
+    assert score.cpu_model(tmp_path / "missing") == "unknown"
 
 
 ONNX_META = {
@@ -1052,7 +1108,9 @@ def test_compare_command_reads_schema_2_and_3(
     md, out = tmp_path / "md", tmp_path / "cmp.json"
     assert score.main(["compare", str(res), "--markdown", str(md), "--out", str(out)]) == 0
     assert "decisions differ" in capsys.readouterr().out
-    (c,) = json.loads(out.read_text())
+    doc = json.loads(out.read_text())
+    (c,) = doc["comparisons"]
+    assert doc["notes"] == []
     assert c["flips"]["thresholds"]["0.9"]["holdout"]["differ"] == 1
     assert "-50.00" in md.read_text()
     # Two summary files given directly: rate deltas only.
@@ -1061,10 +1119,77 @@ def test_compare_command_reads_schema_2_and_3(
     assert "rate deltas only" in capsys.readouterr().out
 
 
-def test_compare_refuses_unknown_schema(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    _summary_file(tmp_path / "s.json", 99, [])
-    assert score.main(["compare", str(tmp_path)]) == 2
-    assert "compare failed: ValueError" in capsys.readouterr().err
+def test_compare_skips_unreadable_files_with_a_note(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _summary_file(tmp_path / "future.json", 99, [_cls("torch-fp32", SCORES_A)])
+    (tmp_path / "broken.json").write_text("{not json")
+    _summary_file(tmp_path / "a.json", 3, [_cls("torch-fp32", SCORES_A)])
+    _summary_file(tmp_path / "b.json", 3, [_cls("onnx-int8", SCORES_B)])
+    assert score.main(["compare", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "- skipped future.json: unknown summary schema" in out
+    assert "- skipped broken.json: JSONDecodeError" in out
+    assert "### org/m@main:X: onnx-int8 vs torch-fp32" in out  # the others still render
+
+
+def test_compare_needs_the_same_weights() -> None:
+    a = _cls("torch-fp32", SCORES_A, weights=[{"file": "m.safetensors", "sha256": "1" * 64}])
+    b = _cls("onnx-int8", SCORES_B, weights=[{"file": "m.safetensors", "sha256": "2" * 64}])
+    records = {
+        ("org/m@main:X", "torch-fp32"): _scores("torch-fp32", SCORES_A),
+        ("org/m@main:X", "onnx-int8"): _scores("onnx-int8", SCORES_B),
+    }
+    (c,) = score.compare_runtimes([a, b], records)
+    assert c["comparable"] is False and c["rows"] == [] and c["flips"] is None
+    table = score.render_compare([c])
+    assert "**not comparable: weights differ**" in table and "Δ (pp)" not in table
+    b2 = _cls("onnx-int8", SCORES_B, weights=a["weights"])
+    b2["resolved_revision"] = "f" * 40  # same files, another commit
+    (c2,) = score.compare_runtimes([a, b2])
+    assert c2["note"] == "not comparable: weights differ"
+    (ok,) = score.compare_runtimes([a, _cls("onnx-int8", SCORES_B, weights=a["weights"])])
+    assert ok["comparable"] is True and ok["rows"]
+
+
+def test_one_bad_pair_does_not_stop_the_report() -> None:
+    other = _cls("onnx-int8", SCORES_B)
+    other["label"] = "Y"
+    pairs = [_cls("torch-fp32", SCORES_A), _cls("onnx-int8", SCORES_B)]
+    pairs += [{**_cls("torch-fp32", SCORES_A), "label": "Y"}, other]
+    bad = _scores("onnx-int8", SCORES_B)
+    bad["families"]["target/t1"]["sha256"] = "9" * 64
+    records = {
+        ("org/m@main:X", "torch-fp32"): _scores("torch-fp32", SCORES_A),
+        ("org/m@main:X", "onnx-int8"): bad,
+        ("org/m@main:Y", "torch-fp32"): _scores("torch-fp32", SCORES_A),
+        ("org/m@main:Y", "onnx-int8"): _scores("onnx-int8", SCORES_B),
+    }
+    x, y = score.compare_runtimes(pairs, records)
+    assert x["flips"] is None and x["note"] == "per-prompt scores not usable (ValueError)"
+    assert x["rows"]  # rate deltas still shown
+    assert y["flips"] is not None and y["note"] is None
+    table = score.render_compare([x, y])
+    assert "per-prompt scores not usable (ValueError): rate deltas only" in table
+    assert "### org/m@main:Y" in table
+    broken = _cls("onnx-int8", SCORES_B)
+    del broken["thresholds"]["0.5"]["classifier"]["sets"]
+    (z,) = score.compare_runtimes([_cls("torch-fp32", SCORES_A), broken])
+    assert z["comparable"] is False and z["note"] == "summary not usable (KeyError)"
+
+
+def test_latency_caveat_when_cpus_differ() -> None:
+    a, b = _cls("torch-fp32", SCORES_A), _cls("onnx-int8", SCORES_B)
+    a["cpu_model"] = b["cpu_model"] = "CPU A"
+    (same,) = score.compare_runtimes([a, b])
+    assert "Latency caveat" not in score.render_compare([same])
+    b["cpu_model"] = "CPU B"
+    (diff,) = score.compare_runtimes([a, b])
+    text = score.render_compare([diff])
+    assert "**Latency caveat:**" in text and "torch-fp32: CPU A; onnx-int8: CPU B" in text
+    b["cpu_model"] = None
+    (unknown,) = score.compare_runtimes([a, b])
+    assert "onnx-int8: unknown" in score.render_compare([unknown])
 
 
 def test_compare_with_nothing_downloaded(
@@ -1089,6 +1214,7 @@ def test_onnx_model_job_end_to_end_writes_scores_without_text(
         return LatentFake("x")
 
     monkeypatch.setattr(score, "load_onnx_detector", fake_onnx)
+    monkeypatch.setattr(score, "check_onnx_size", lambda m: 1)
     monkeypatch.setattr(score, "load_hf_detector", lambda m, label: LatentFake("x"))
     paths = {}
     for runtime in score.RUNTIMES:
@@ -1103,6 +1229,7 @@ def test_onnx_model_job_end_to_end_writes_scores_without_text(
     assert work == [tmp_path / "onnx"]
     summary = json.loads(paths["onnx-int8"][0].read_text())
     assert summary["schema"] == 3
+    assert summary["environment"]["cpu_model"] == score.cpu_model()
     (cls,) = summary["classifiers"]
     assert cls["runtime"] == "onnx-int8" and cls["onnx"]["sha256"] == "d" * 64
     assert cls["weights"] == OK_META["weights"]  # the source weights' sha256 stays
@@ -1117,20 +1244,51 @@ def test_onnx_model_job_end_to_end_writes_scores_without_text(
     assert score.main(["compare", *files]) == 0
     table = capsys.readouterr().out
     assert "decisions differ" in table and "| 0.00% (0/" in table  # identical fakes
+    assert "Latency caveat" not in table  # same machine
 
 
-def test_scores_out_takes_one_model(
+@pytest.mark.parametrize("fail", [False, True])
+def test_onnx_temp_dir_lives_as_long_as_the_detector(
     built: tuple[Path, dict[str, Any], str],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    fail: bool,
 ) -> None:
     sets_dir, _, _ = built
-    monkeypatch.setattr(score, "load_hf_detector", lambda m, label: LatentFake("x"))
-    argv = ["run", "--sets", str(sets_dir), "--out", str(tmp_path / "o")]
-    argv += ["--scores-out", str(tmp_path / "s"), *_model_dirs(tmp_path, [OK_META, OK_META])]
-    assert score.main(argv) == 2
-    assert "run failed: ValueError" in capsys.readouterr().err
+    seen: list[Path] = []
+
+    class Checking(LatentFake):
+        def evaluate(self, text: str) -> score.Outcome:
+            assert seen[0].is_dir()  # still there while the detector scores
+            if fail:
+                raise RuntimeError("scoring failed")
+            return super().evaluate(text)
+
+    def fake_onnx(meta: dict[str, Any], label: str, work_dir: Path) -> Checking:
+        assert work_dir.is_dir()
+        seen.append(work_dir)
+        return Checking("x")
+
+    monkeypatch.setattr(score, "load_onnx_detector", fake_onnx)
+    monkeypatch.setattr(score, "check_onnx_size", lambda m: 1)
+    argv = ["run", "--sets", str(sets_dir), "--out", str(tmp_path / "o"), "--runtime", "onnx-int8"]
+    assert score.main([*argv, *_model_dirs(tmp_path, [OK_META])]) == (2 if fail else 0)
+    assert len(seen) == 1 and not seen[0].exists()  # removed, even on error
+
+
+def test_scores_out_takes_one_model_at_parse_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def never(*a: Any) -> None:
+        raise AssertionError("argument errors must stop the run before any scoring")
+
+    monkeypatch.setattr(score, "score", never)
+    argv = ["run", "--sets", str(tmp_path), "--out", str(tmp_path / "o")]
+    argv += ["--scores-out", str(tmp_path / "s")]
+    with pytest.raises(SystemExit):
+        score.main([*argv, *_model_dirs(tmp_path, [OK_META, OK_META])])
+    with pytest.raises(SystemExit):
+        score.main(argv)  # no --model-dir at all
 
 
 def test_run_rejects_unknown_runtime(tmp_path: Path) -> None:

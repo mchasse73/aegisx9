@@ -36,6 +36,7 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -83,7 +84,9 @@ QUANTIZATION: dict[str, Any] = {
     "reduce_range": False,
 }
 EXPORT_CHECK_WINDOWS = (512, 300, 64, 7)  # window lengths for the fp32 export parity check
-EXPORT_CHECK_TOLERANCE = 1e-3
+EXPORT_CHECK_TOLERANCE = 1e-3  # max |p_torch - p_onnx_fp32| before quantising
+# protobuf caps a single-file ONNX model at 2 GB; leave room for the graph itself.
+ONNX_MAX_SOURCE_BYTES = 1_800_000_000
 
 
 # --------------------------------------------------------------------------- data
@@ -108,6 +111,19 @@ class Outcome:
     seconds: float = 0.0
     blocked_by: str | None = None
     chunk_seconds: float | None = None
+
+
+def cpu_model(cpuinfo: Path = Path("/proc/cpuinfo")) -> str:
+    """The first "model name" in /proc/cpuinfo, or "unknown" (latency depends on it)."""
+    try:
+        with cpuinfo.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                key, sep, value = line.partition(":")
+                if sep and key.strip() == "model name" and value.strip():
+                    return value.strip()
+    except OSError:
+        pass
+    return "unknown"
 
 
 def load_sets(directory: Path) -> tuple[dict[str, Any], list[Prompt]]:
@@ -402,14 +418,84 @@ def load_hf_detector(
     return HFClassifierDetector(meta["model_id"], tok, predict, max_length=max_length)
 
 
-def export_onnx(model: Any, path: Path, max_length: int) -> str:  # pragma: no cover - CI only
+class OnnxExportError(Exception):
+    """The onnx-int8 path can't produce a faithful export; the job fails before quantising."""
+
+
+# safetensors dtypes: float tensors become 4 bytes per element in the fp32 export.
+_SAFETENSORS_WIDTH = {"BOOL": 1, "U8": 1, "I8": 1, "I16": 2, "U16": 2, "I32": 4, "U32": 4}
+_SAFETENSORS_WIDTH |= {"I64": 8, "U64": 8}
+_SAFETENSORS_MAX_HEADER = 100 * 1024 * 1024
+
+
+def fp32_export_bytes(local_path: Path, files: Sequence[str]) -> int:
+    """The fp32 export's approximate size, from the safetensors headers only (no weights read).
+
+    A safetensors file starts with an 8-byte little-endian header length and a JSON header
+    giving every tensor's dtype and shape. Floating-point tensors count 4 bytes per element
+    (the export is fp32 whatever the stored precision); others count at their own width.
+    """
+    total = 0
+    for name in files:
+        with (local_path / name).open("rb") as fh:
+            length = int.from_bytes(fh.read(8), "little")
+            if not 0 < length <= _SAFETENSORS_MAX_HEADER:
+                raise ValueError("not a safetensors header")
+            header = json.loads(fh.read(length))
+        for key, t in header.items():
+            if key == "__metadata__":
+                continue
+            count = math.prod(int(d) for d in t["shape"])
+            total += count * _SAFETENSORS_WIDTH.get(str(t["dtype"]), 4)
+    return total
+
+
+def check_onnx_size(meta: Mapping[str, Any]) -> int:
+    """Refuse a model whose fp32 export would pass protobuf's 2 GB single-file limit."""
+    files = [str(w["file"]) for w in meta.get("weights") or []]
+    size = fp32_export_bytes(Path(meta["local_path"]), files)
+    if size > ONNX_MAX_SOURCE_BYTES:
+        print(
+            f"::error::{meta['model_id']}: its fp32 weights are {size / 1e9:.2f} GB; a "
+            "single-file ONNX export is limited to 2 GB (protobuf), so onnx-int8 takes models "
+            f"up to {ONNX_MAX_SOURCE_BYTES / 1e9:.1f} GB"
+        )
+        raise OnnxExportError("model too large for a single-file ONNX export")
+    return size
+
+
+def check_export(
+    model_id: str,
+    torch_p: Sequence[float],
+    onnx_p: Sequence[float],
+    tolerance: float = EXPORT_CHECK_TOLERANCE,
+) -> float:
+    """The fp32 export's largest probability difference from torch; fails above ``tolerance``.
+
+    A broken export must stop the job before quantising, or its errors would be reported
+    as quantisation effects.
+    """
+    diff = max((abs(a - b) for a, b in zip(torch_p, onnx_p, strict=True)), default=0.0)
+    if diff > tolerance:
+        print(
+            f"::error::{model_id}: the fp32 ONNX export differs from torch by {diff:.2e} "
+            f"(tolerance {tolerance:g}); not quantising"
+        )
+        raise OnnxExportError("fp32 ONNX export differs from torch")
+    return diff
+
+
+def export_onnx(
+    model: Any, path: Path, max_length: int
+) -> tuple[str, int | None]:  # pragma: no cover - needs torch and onnx (CI only)
     """Export ``logits(input_ids, attention_mask)`` with dynamic batch and sequence axes.
 
     torch's default exporter (``torch.export`` based, needs onnxscript) at a pinned opset,
     as one self-contained file, so its sha256 covers every weight. The exporter's
     intermediate shape annotations (``value_info``) are dropped: onnxruntime's quantiser
     re-infers shapes and refuses a DeBERTa-v2 export that keeps them ("inferred shape and
-    existing shape differ"). Inputs, outputs and weights are untouched.
+    existing shape differ"). Inputs, outputs and weights are untouched. Returns the
+    exporter's description and the default-domain opset.
     """
     import onnx  # type: ignore[import-not-found,unused-ignore]
     import torch  # type: ignore[import-not-found,unused-ignore]
@@ -440,8 +526,10 @@ def export_onnx(model: Any, path: Path, max_length: int) -> str:  # pragma: no c
         )
     exported = onnx.load(str(path))
     del exported.graph.value_info[:]
+    opset = next((o.version for o in exported.opset_import if o.domain in ("", "ai.onnx")), None)
     onnx.save(exported, str(path))
-    return "torch.onnx.export (dynamo), value_info dropped"
+    del exported
+    return "torch.onnx.export (dynamo), value_info dropped", opset
 
 
 def load_onnx_detector(
@@ -449,13 +537,13 @@ def load_onnx_detector(
 ) -> HFClassifierDetector:  # pragma: no cover - needs torch, onnxruntime and a model (CI only)
     """Export the pinned weights to ONNX, quantise them to int8, score with onnxruntime (CPU).
 
-    Before quantising, the fp32 export is checked against torch on fixed windows, so a broken
-    export isn't mistaken for a quantisation effect.
+    Before quantising, the fp32 export is checked against torch on fixed windows
+    (``check_export``), so a broken export fails the job instead of passing for a
+    quantisation effect.
     """
     import gc
 
     import numpy as np  # type: ignore[import-not-found,unused-ignore]
-    import onnx  # type: ignore[import-not-found,unused-ignore]
     import onnxruntime as ort  # type: ignore[import-not-found,unused-ignore]
     from onnxruntime.quantization import (  # type: ignore[import-not-found,unused-ignore]
         QuantType,
@@ -465,9 +553,7 @@ def load_onnx_detector(
     tok, model, index, pad, max_length = _load_hf(meta, label)
     work_dir.mkdir(parents=True, exist_ok=True)
     fp32, int8 = work_dir / "model.onnx", work_dir / "model.int8.onnx"
-    exporter = export_onnx(model, fp32, max_length)
-    opsets = onnx.load(str(fp32), load_external_data=False).opset_import
-    opset = next((o.version for o in opsets if o.domain in ("", "ai.onnx")), None)
+    exporter, opset = export_onnx(model, fp32, max_length)
     provider = "CPUExecutionProvider"
 
     def session_logits(path: Path) -> Logits:
@@ -489,9 +575,7 @@ def load_onnx_detector(
     )
     torch_p = make_predict(_torch_logits(model), pad, index)(check)
     onnx_p = make_predict(session_logits(fp32), pad, index)(check)
-    diff = max(abs(a - b) for a, b in zip(torch_p, onnx_p, strict=True))
-    if diff > EXPORT_CHECK_TOLERANCE:
-        print(f"::warning::{meta['model_id']}: fp32 ONNX export differs from torch by {diff:.2e}")
+    diff = check_export(meta["model_id"], torch_p, onnx_p)
     del model
     gc.collect()
     quantize_dynamic(
@@ -526,8 +610,12 @@ def load_onnx_detector(
 def load_detector(
     meta: dict[str, Any], runtime: str, work_dir: Path | None = None
 ) -> HFClassifierDetector:
+    """The classifier on ``runtime``. onnx-int8 needs a work dir, which the caller owns."""
     if runtime == ONNX_INT8:
-        return load_onnx_detector(meta, meta["label"], work_dir or Path(tempfile.mkdtemp()))
+        if work_dir is None:
+            raise ValueError("onnx-int8 needs a work dir")
+        check_onnx_size(meta)
+        return load_onnx_detector(meta, meta["label"], work_dir)
     return load_hf_detector(meta, meta["label"])
 
 
@@ -691,13 +779,20 @@ def outcomes_for(
 
 
 # --------------------------------------------------------------------------- runtime agreement
-def spec_of(c: Mapping[str, Any]) -> str:
-    return f"{c.get('model_id')}@{c.get('revision')}:{c.get('label')}"
+def spec_from(c: Mapping[str, Any]) -> ModelSpec:
+    """The spec a classifier summary (or download meta) was scored for."""
+    return ModelSpec(str(c.get("model_id")), str(c.get("revision")), str(c.get("label")))
 
 
 def runtime_of(c: Mapping[str, Any]) -> str:
     """A classifier summary's runtime; schema 2 summaries predate runtimes (torch-fp32)."""
     return str(c.get("runtime") or TORCH_FP32)
+
+
+def weights_identity(c: Mapping[str, Any]) -> tuple[Any, ...]:
+    """What makes two runs score the same source weights: commit and every weights hash."""
+    weights = sorted((str(w.get("file")), str(w.get("sha256"))) for w in c.get("weights") or [])
+    return (c.get("resolved_revision"), tuple(weights))
 
 
 def scores_record(
@@ -760,26 +855,83 @@ def decision_flips(
 
 def collect_results(
     paths: Sequence[Path],
-) -> tuple[list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
-    """Classifier summaries and score records from files or directories of JSON files.
+) -> tuple[list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]], list[str]]:
+    """Classifier summaries, score records and notes, from files or directories of JSON.
 
-    Score records pair with summaries by spec and runtime. Heuristic outcomes are ignored. A
-    summary with a schema this reader doesn't know is refused.
+    Score records pair with summaries by spec and runtime; heuristic outcomes are ignored.
+    A file that can't be read, or a summary with a schema this reader doesn't know, is
+    skipped with a note (its name and the error type only). Each classifier carries the CPU
+    model its summary recorded, as ``cpu_model``.
     """
     files: list[Path] = []
     for p in paths:
         files.extend(sorted(p.rglob("*.json")) if p.is_dir() else [p])
     classifiers: list[dict[str, Any]] = []
     scores: dict[tuple[str, str], dict[str, Any]] = {}
+    notes: list[str] = []
     for f in files:
-        doc = json.loads(f.read_text(encoding="utf-8"))
-        if doc.get("kind") == "classifier_scores":
-            scores[(doc["spec"], doc["runtime"])] = doc
-        elif "classifiers" in doc:
-            if doc.get("schema") not in READABLE_SCHEMAS:
-                raise ValueError(f"unknown summary schema in {f.name}")
-            classifiers.extend(doc["classifiers"])
-    return classifiers, scores
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+            if doc.get("kind") == "classifier_scores":
+                scores[(str(doc["spec"]), str(doc["runtime"]))] = doc
+            elif "classifiers" in doc:
+                if doc.get("schema") not in READABLE_SCHEMAS:
+                    notes.append(f"skipped {f.name}: unknown summary schema")
+                    continue
+                cpu = (doc.get("environment") or {}).get("cpu_model")
+                classifiers.extend({**c, "cpu_model": cpu} for c in doc["classifiers"])
+        except (ValueError, KeyError, TypeError, AttributeError, OSError) as e:
+            notes.append(f"skipped {f.name}: {type(e).__name__}")
+    return classifiers, scores, notes
+
+
+def _compare_pair(
+    spec: str,
+    base_rt: str,
+    base: Mapping[str, Any],
+    rt: str,
+    other: Mapping[str, Any],
+    scores: Mapping[tuple[str, str], Mapping[str, Any]],
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "spec": spec,
+        "baseline": base_rt,
+        "runtime": rt,
+        "comparable": True,
+        "rows": [],
+        "latency": {base_rt: base.get("latency"), rt: other.get("latency")},
+        "cpu_model": {base_rt: base.get("cpu_model"), rt: other.get("cpu_model")},
+        "flips": None,
+        "note": None,
+    }
+    if weights_identity(base) != weights_identity(other):
+        entry.update(comparable=False, note="not comparable: weights differ")
+        return entry
+    try:
+        thresholds = [t for t in base["thresholds"] if t in other["thresholds"]]
+        for t in thresholds:
+            sa = base["thresholds"][t]["classifier"]["sets"]
+            sb = other["thresholds"][t]["classifier"]["sets"]
+            for s in [s for s in SET_ORDER if s in sa and s in sb]:
+                entry["rows"].append(
+                    {
+                        "threshold": t,
+                        "set": s,
+                        "base": sa[s],
+                        "other": sb[s],
+                        "delta_pp": round((sb[s]["rate"] - sa[s]["rate"]) * 100, 4),
+                    }
+                )
+    except (ValueError, KeyError, TypeError) as e:
+        entry.update(comparable=False, rows=[], note=f"summary not usable ({type(e).__name__})")
+        return entry
+    ra, rb = scores.get((spec, base_rt)), scores.get((spec, rt))
+    if ra is not None and rb is not None:
+        try:
+            entry["flips"] = decision_flips(ra, rb, thresholds)
+        except (ValueError, KeyError, TypeError) as e:
+            entry["note"] = f"per-prompt scores not usable ({type(e).__name__})"
+    return entry
 
 
 def compare_runtimes(
@@ -788,61 +940,41 @@ def compare_runtimes(
 ) -> list[dict[str, Any]]:
     """For each spec scored by two or more runtimes: every other runtime against the baseline.
 
-    The baseline is torch-fp32 when present. Per threshold and set: both block rates and
-    the delta in percentage points; with both runtimes' score records, also the share of
-    prompts whose decision differs.
+    The baseline is torch-fp32 when present. Runs pair only when they scored the same source
+    weights (resolved revision and every weights sha256); otherwise the pair is marked not
+    comparable. Per threshold and set: both block rates and the delta in percentage points;
+    with both runtimes' score records, also the share of prompts whose decision differs. A
+    pair whose data can't be used gets a note; the others are still compared.
     """
     scores = scores or {}
     by_spec: dict[str, dict[str, Mapping[str, Any]]] = defaultdict(dict)
     for c in classifiers:
-        by_spec[spec_of(c)].setdefault(runtime_of(c), c)
+        by_spec[str(spec_from(c))].setdefault(runtime_of(c), c)
     out: list[dict[str, Any]] = []
     for spec, runs in sorted(by_spec.items()):
         if len(runs) < 2:
             continue
         base_rt = TORCH_FP32 if TORCH_FP32 in runs else sorted(runs)[0]
-        base = runs[base_rt]
         for rt in sorted(r for r in runs if r != base_rt):
-            other = runs[rt]
-            thresholds = [t for t in base["thresholds"] if t in other["thresholds"]]
-            rows = []
-            for t in thresholds:
-                sa = base["thresholds"][t]["classifier"]["sets"]
-                sb = other["thresholds"][t]["classifier"]["sets"]
-                for s in [s for s in SET_ORDER if s in sa and s in sb]:
-                    rows.append(
-                        {
-                            "threshold": t,
-                            "set": s,
-                            "base": sa[s],
-                            "other": sb[s],
-                            "delta_pp": round((sb[s]["rate"] - sa[s]["rate"]) * 100, 4),
-                        }
-                    )
-            entry: dict[str, Any] = {
-                "spec": spec,
-                "baseline": base_rt,
-                "runtime": rt,
-                "rows": rows,
-                "latency": {base_rt: base.get("latency"), rt: other.get("latency")},
-                "flips": None,
-            }
-            ra, rb = scores.get((spec, base_rt)), scores.get((spec, rt))
-            if ra is not None and rb is not None:
-                entry["flips"] = decision_flips(ra, rb, thresholds)
-            out.append(entry)
+            out.append(_compare_pair(spec, base_rt, runs[base_rt], rt, runs[rt], scores))
     return out
 
 
-def render_compare(comparisons: Sequence[Mapping[str, Any]]) -> str:
+def render_compare(comparisons: Sequence[Mapping[str, Any]], notes: Sequence[str] = ()) -> str:
     """Rate deltas (and decision flips when per-prompt scores exist), family names only."""
     lines = ["## Runtime agreement", ""]
+    lines += [f"- {n}" for n in notes]
+    if notes:
+        lines.append("")
     if not comparisons:
         lines.append("No model was scored by more than one runtime.")
         return "\n".join(lines) + "\n"
     for c in comparisons:
         base, rt, flips = c["baseline"], c["runtime"], c["flips"]
         lines += [f"### {c['spec']}: {rt} vs {base}", ""]
+        if not c.get("comparable", True):
+            lines += [f"**{c['note']}**", ""]
+            continue
         lines.append(f"| threshold | set | {base} | {rt} | Δ (pp) | decisions differ |")
         lines.append("|---|---|---|---|---|---|")
         for r in c["rows"]:
@@ -854,11 +986,20 @@ def render_compare(comparisons: Sequence[Mapping[str, Any]]) -> str:
                 f"| ≥{r['threshold']} | {r['set']} | {_pct(r['base'])} | {_pct(r['other'])} "
                 f"| {r['delta_pp']:+.2f} | {differ} |"
             )
-        if flips is None:
+        if c.get("note"):
+            lines.append(f"\n{c['note']}: rate deltas only.")
+        elif flips is None:
             lines.append("\nNo per-prompt scores for both runtimes: rate deltas only.")
         else:
             d = flips["score_abs_diff"]
             lines.append(f"\nscore |Δ|: max {d['max']:.4f}, mean {d['mean']:.6f}")
+        cpus = c.get("cpu_model") or {}
+        if len({cpus.get(base), cpus.get(rt)}) > 1:
+            lines.append(
+                f"\n**Latency caveat:** the runs used different CPUs ({base}: "
+                f"{cpus.get(base) or 'unknown'}; {rt}: {cpus.get(rt) or 'unknown'}), so their "
+                "latencies aren't comparable."
+            )
         for name, lat in c["latency"].items():
             one = (lat or {}).get("single_prompt")
             if one:
@@ -1148,6 +1289,7 @@ def score(
         "environment": {
             "python": sys.version.split()[0],
             "cpu_count": os.cpu_count(),
+            "cpu_model": cpu_model(),
             "packages": {
                 d: package_version(d)
                 for d in (
@@ -1174,23 +1316,31 @@ def score(
         heuristic_blocked = [o.blocked for o in heuristic_outcomes]
     elif heuristic_record is not None:
         heuristic_blocked = outcomes_for(heuristic_record, manifest, prompts)
-    for meta in models:
-        if meta.get("status") != "ok":
-            summary["skipped"].append({"model": meta.get("model_id"), "reason": meta.get("reason")})
-            continue
-        meta["runtime"] = runtime
-        factory = detector_factory or (lambda m: load_detector(m, runtime, work_dir))
-        detector = factory(meta)
-        log(f"{meta['model_id']} [{runtime}]: {len(prompts)} prompts")
-        outcomes = run_detector(detector, prompts)
-        sample = single_prompt_sample(len(prompts))
-        log(f"{meta['model_id']}: {len(sample)} prompts one at a time")
-        single = [detector.evaluate(prompts[i].text) for i in sample]
-        summary["classifiers"].append(
-            classifier_summary(prompts, outcomes, meta, heuristic_blocked, single)
-        )
-        if classifier_outcomes is not None:
-            classifier_outcomes.append((meta, outcomes))
+    with contextlib.ExitStack() as stack:
+        # Without --work-dir, the ONNX files live in a temporary directory for as long as
+        # the detectors do, and it is removed even when scoring fails.
+        files_dir = work_dir
+        if files_dir is None and runtime == ONNX_INT8 and models:
+            files_dir = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="onnx-")))
+        for meta in models:
+            if meta.get("status") != "ok":
+                summary["skipped"].append(
+                    {"model": meta.get("model_id"), "reason": meta.get("reason")}
+                )
+                continue
+            meta["runtime"] = runtime
+            factory = detector_factory or (lambda m: load_detector(m, runtime, files_dir))
+            detector = factory(meta)
+            log(f"{meta['model_id']} [{runtime}]: {len(prompts)} prompts")
+            outcomes = run_detector(detector, prompts)
+            sample = single_prompt_sample(len(prompts))
+            log(f"{meta['model_id']}: {len(sample)} prompts one at a time")
+            single = [detector.evaluate(prompts[i].text) for i in sample]
+            summary["classifiers"].append(
+                classifier_summary(prompts, outcomes, meta, heuristic_blocked, single)
+            )
+            if classifier_outcomes is not None:
+                classifier_outcomes.append((meta, outcomes))
     return summary, prompts, heuristic_outcomes
 
 
@@ -1226,11 +1376,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.outcomes_out and heuristic_outcomes is not None:
         record = outcomes_record(summary["sets"], prompts, [o.blocked for o in heuristic_outcomes])
         Path(args.outcomes_out).write_text(json.dumps(record, separators=(",", ":")) + "\n")
-    if args.scores_out and scored:
-        if len(scored) != 1:
-            raise ValueError("--scores-out takes one model per run")
+    if args.scores_out and len(scored) == 1:  # main() allows one --model-dir with it
         meta, outcomes = scored[0]
-        rec = scores_record(summary["sets"], prompts, outcomes, spec_of(meta), args.runtime)
+        spec = str(spec_from(meta))
+        rec = scores_record(summary["sets"], prompts, outcomes, spec, args.runtime)
         Path(args.scores_out).write_text(json.dumps(rec, separators=(",", ":")) + "\n")
     table = render_markdown(summary)
     print(table)
@@ -1246,11 +1395,12 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_compare(args: argparse.Namespace) -> int:
     """Report-only: a model scored by one runtime only is noted, not an error."""
-    classifiers, scores = collect_results(args.paths)
+    classifiers, scores, notes = collect_results(args.paths)
     comparisons = compare_runtimes(classifiers, scores)
     if args.out:
-        args.out.write_text(json.dumps(comparisons, indent=2, sort_keys=True) + "\n")
-    table = render_compare(comparisons)
+        doc = {"comparisons": comparisons, "notes": notes}
+        args.out.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+    table = render_compare(comparisons, notes)
     print(table)
     if args.markdown:
         with Path(args.markdown).open("a", encoding="utf-8") as fh:
@@ -1285,8 +1435,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     cmp.add_argument("--out", type=Path, help="write the comparison as JSON")
     cmp.set_defaults(func=cmd_compare)
     args = parser.parse_args(argv)
+    # Every argument check runs here, before any scoring.
     if args.command == "run" and args.gate and not args.heuristics:
         parser.error("--gate needs --heuristics")
+    if args.command == "run" and args.scores_out and len(args.model_dir or []) != 1:
+        parser.error("--scores-out takes exactly one --model-dir")
     try:
         return int(args.func(args))
     except Exception as e:  # print only the type (security rule 4)
