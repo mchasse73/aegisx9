@@ -80,5 +80,26 @@ Latency is reported two ways:
 Model results are report-only, and a word list that isn't pinned marks their false-positive rows
 "unpinned corpus". Empty `models` runs the heuristics alone.
 
+**Runtimes** (#211), input `runtimes` (default `torch-fp32,onnx-int8`; an unknown value fails
+the plan job). Each model × runtime is its own job, with up to 350 minutes:
+
+- `torch-fp32`: the published weights in torch, as before.
+- `onnx-int8`: the runtime the classifier sidecar will use (#198). The job exports the downloaded
+  weights offline to ONNX with torch's default exporter at opset 20, with dynamic batch and
+  sequence axes and inputs `input_ids` and `attention_mask`. It then quantises them with
+  onnxruntime's `quantize_dynamic` (QInt8 weights, per-tensor) and scores them with an
+  onnxruntime CPU session. Chunking, batching, thresholds and latency are the same code as
+  torch's. Before quantising, the fp32 export is checked against torch on four fixed windows.
+  The summary records the int8 and fp32 files' sha256 and sizes, the opset, the onnx, onnxscript
+  and onnxruntime versions, the quantisation settings and that check, next to the source
+  weights' sha256. The pinned versions are in the workflow's `env`.
+
+Each model job also uploads its per-prompt scores, keyed by set, family and index, with no text.
+A final report-only job (`score.py compare`) shows each model's runtimes side by side, with
+torch-fp32 as the baseline. For each threshold and set it gives both block rates, the delta in
+percentage points, and the share of prompts whose block decision differs. It also gives the
+largest and mean score difference and the one-prompt-at-a-time latency. Summaries are schema 3:
+each classifier carries `runtime`, and a schema 2 summary is read as torch-fp32.
+
 Locally (no models): `python -m redteam.eval.build_sets --out /tmp/sets` needs garak 0.17.1 in
 the interpreter; then `python -m redteam.eval.score run --sets /tmp/sets --heuristics --gate --out summary.json`.
