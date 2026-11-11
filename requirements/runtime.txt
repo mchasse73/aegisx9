@@ -9,3 +9,5 @@ opentelemetry-exporter-otlp-proto-http==1.45.1
 # JWT verification in aegisx9.auth (custom_auth hook, ADR 0010). LiteLLM[proxy] allows these.
 pyjwt[crypto]==2.15.1
 cryptography==50.0.2
+# Transitive (not a direct dependency); pinned at the fix for CVE-2026-49272 (#205).
+oauthlib==4.0.1
