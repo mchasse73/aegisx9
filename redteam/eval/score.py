@@ -370,11 +370,17 @@ def make_predict(logits: Logits, pad: int, index: int, batch: int = BATCH_WINDOW
     return predict
 
 
-def export_check_windows(vocab_size: int, cls: int, sep: int) -> list[list[int]]:
-    """Fixed pseudo-random windows, special ids at both ends, for the export parity check."""
+def export_check_windows(
+    vocab_size: int, cls: int, sep: int, max_length: int = DEFAULT_MAX_LENGTH
+) -> list[list[int]]:
+    """Fixed pseudo-random windows, special ids at both ends, for the export parity check.
+
+    No window is longer than ``max_length`` (the detector's), special tokens included.
+    """
     rng = random.Random(SEED)  # noqa: S311 - reproducible inputs, not a secret
     hi = max(vocab_size - 1, 3)
-    return [[cls, *(rng.randint(3, hi) for _ in range(n - 2)), sep] for n in EXPORT_CHECK_WINDOWS]
+    lengths = [max(2, min(n, max_length)) for n in EXPORT_CHECK_WINDOWS]
+    return [[cls, *(rng.randint(3, hi) for _ in range(n - 2)), sep] for n in lengths]
 
 
 def _load_hf(
@@ -475,6 +481,12 @@ def check_export(
     A broken export must stop the job before quantising, or its errors would be reported
     as quantisation effects.
     """
+    if not all(math.isfinite(x) for x in (*torch_p, *onnx_p)):
+        print(
+            f"::error::{model_id}: the export check produced a non-finite probability "
+            f"(tolerance {tolerance:g}); not quantising"
+        )
+        raise OnnxExportError("non-finite probability in the export check")
     diff = max((abs(a - b) for a, b in zip(torch_p, onnx_p, strict=True)), default=0.0)
     if diff > tolerance:
         print(
@@ -572,6 +584,7 @@ def load_onnx_detector(
         int(model.config.vocab_size),
         tok.cls_token_id if tok.cls_token_id is not None else 1,
         tok.sep_token_id if tok.sep_token_id is not None else 2,
+        max_length,
     )
     torch_p = make_predict(_torch_logits(model), pad, index)(check)
     onnx_p = make_predict(session_logits(fp32), pad, index)(check)
@@ -607,6 +620,15 @@ def load_onnx_detector(
     return HFClassifierDetector(meta["model_id"], tok, predict, max_length=max_length)
 
 
+def model_work_name(meta: Mapping[str, Any]) -> str:
+    """A work subdirectory unique to a model: its spec's slug plus the resolved revision.
+
+    Several ``--model-dir`` in one run would otherwise overwrite each other's ONNX files.
+    """
+    revision = re.sub(r"[^A-Za-z0-9_.-]", "_", str(meta.get("resolved_revision") or "unresolved"))
+    return f"{spec_from(meta).slug}-{revision}"
+
+
 def load_detector(
     meta: dict[str, Any], runtime: str, work_dir: Path | None = None
 ) -> HFClassifierDetector:
@@ -615,7 +637,7 @@ def load_detector(
         if work_dir is None:
             raise ValueError("onnx-int8 needs a work dir")
         check_onnx_size(meta)
-        return load_onnx_detector(meta, meta["label"], work_dir)
+        return load_onnx_detector(meta, meta["label"], work_dir / model_work_name(meta))
     return load_hf_detector(meta, meta["label"])
 
 
@@ -779,6 +801,9 @@ def outcomes_for(
 
 
 # --------------------------------------------------------------------------- runtime agreement
+DUPLICATE_RECORD = "duplicate_classifier_scores"
+
+
 def spec_from(c: Mapping[str, Any]) -> ModelSpec:
     """The spec a classifier summary (or download meta) was scored for."""
     return ModelSpec(str(c.get("model_id")), str(c.get("revision")), str(c.get("label")))
@@ -873,7 +898,10 @@ def collect_results(
         try:
             doc = json.loads(f.read_text(encoding="utf-8"))
             if doc.get("kind") == "classifier_scores":
-                scores[(str(doc["spec"]), str(doc["runtime"]))] = doc
+                key = (str(doc["spec"]), str(doc["runtime"]))
+                # Two records for one spec and runtime: which belongs to which summary is
+                # unknown, so neither is used (compare marks the spec as duplicate runs).
+                scores[key] = {"kind": DUPLICATE_RECORD} if key in scores else doc
             elif "classifiers" in doc:
                 if doc.get("schema") not in READABLE_SCHEMAS:
                     notes.append(f"skipped {f.name}: unknown summary schema")
@@ -904,10 +932,10 @@ def _compare_pair(
         "flips": None,
         "note": None,
     }
-    if weights_identity(base) != weights_identity(other):
-        entry.update(comparable=False, note="not comparable: weights differ")
-        return entry
     try:
+        if weights_identity(base) != weights_identity(other):
+            entry.update(comparable=False, note="not comparable: weights differ")
+            return entry
         thresholds = [t for t in base["thresholds"] if t in other["thresholds"]]
         for t in thresholds:
             sa = base["thresholds"][t]["classifier"]["sets"]
@@ -922,14 +950,14 @@ def _compare_pair(
                         "delta_pp": round((sb[s]["rate"] - sa[s]["rate"]) * 100, 4),
                     }
                 )
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
         entry.update(comparable=False, rows=[], note=f"summary not usable ({type(e).__name__})")
         return entry
     ra, rb = scores.get((spec, base_rt)), scores.get((spec, rt))
     if ra is not None and rb is not None:
         try:
             entry["flips"] = decision_flips(ra, rb, thresholds)
-        except (ValueError, KeyError, TypeError) as e:
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
             entry["note"] = f"per-prompt scores not usable ({type(e).__name__})"
     return entry
 
@@ -944,16 +972,37 @@ def compare_runtimes(
     weights (resolved revision and every weights sha256); otherwise the pair is marked not
     comparable. Per threshold and set: both block rates and the delta in percentage points;
     with both runtimes' score records, also the share of prompts whose decision differs. A
-    pair whose data can't be used gets a note; the others are still compared.
+    pair whose data can't be used gets a note; the others are still compared. A spec with
+    more than one summary (or score record) for one runtime is ambiguous: it is marked
+    "not comparable: duplicate runs" rather than pairing an arbitrary run with another.
     """
     scores = scores or {}
-    by_spec: dict[str, dict[str, Mapping[str, Any]]] = defaultdict(dict)
+    by_spec: dict[str, dict[str, list[Mapping[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     for c in classifiers:
-        by_spec[str(spec_from(c))].setdefault(runtime_of(c), c)
+        by_spec[str(spec_from(c))][runtime_of(c)].append(c)
     out: list[dict[str, Any]] = []
-    for spec, runs in sorted(by_spec.items()):
-        if len(runs) < 2:
+    for spec, grouped in sorted(by_spec.items()):
+        if len(grouped) < 2:
             continue
+        duplicate = any(len(v) > 1 for v in grouped.values()) or any(
+            (scores.get((spec, rt)) or {}).get("kind") == DUPLICATE_RECORD for rt in grouped
+        )
+        if duplicate:
+            out.append(
+                {
+                    "spec": spec,
+                    "baseline": TORCH_FP32 if TORCH_FP32 in grouped else sorted(grouped)[0],
+                    "runtime": ", ".join(sorted(grouped)),
+                    "comparable": False,
+                    "rows": [],
+                    "latency": {},
+                    "cpu_model": {},
+                    "flips": None,
+                    "note": "not comparable: duplicate runs",
+                }
+            )
+            continue
+        runs = {rt: v[0] for rt, v in grouped.items()}
         base_rt = TORCH_FP32 if TORCH_FP32 in runs else sorted(runs)[0]
         for rt in sorted(r for r in runs if r != base_rt):
             out.append(_compare_pair(spec, base_rt, runs[base_rt], rt, runs[rt], scores))

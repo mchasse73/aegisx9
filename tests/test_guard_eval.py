@@ -895,11 +895,60 @@ def test_load_detector_dispatches_on_runtime(
         score, "load_onnx_detector", lambda m, label, d: seen.append(("onnx", label, d))
     )
     monkeypatch.setattr(score, "check_onnx_size", lambda m: seen.append(("size",)))
-    score.load_detector({"label": "X"}, "torch-fp32")
-    score.load_detector({"label": "X"}, "onnx-int8", tmp_path)
-    assert seen == [("torch", "X"), ("size",), ("onnx", "X", tmp_path)]  # size first
+    meta = {"model_id": "org/m", "revision": "main", "label": "X", "resolved_revision": "a" * 40}
+    score.load_detector(meta, "torch-fp32")
+    score.load_detector(meta, "onnx-int8", tmp_path)
+    sub = tmp_path / f"{score.parse_spec('org/m@main:X').slug}-{'a' * 40}"
+    assert seen == [("torch", "X"), ("size",), ("onnx", "X", sub)]  # size first
     with pytest.raises(ValueError):
-        score.load_detector({"label": "X"}, "onnx-int8")  # the caller owns the work dir
+        score.load_detector(meta, "onnx-int8")  # the caller owns the work dir
+
+
+def test_each_model_gets_its_own_work_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    dirs: list[Path] = []
+    monkeypatch.setattr(score, "load_onnx_detector", lambda m, label, d: dirs.append(d))
+    monkeypatch.setattr(score, "check_onnx_size", lambda m: 1)
+    base = {"revision": "main", "label": "X", "resolved_revision": "b" * 40}
+    metas = [
+        {**base, "model_id": "org/a"},
+        {**base, "model_id": "org/b"},
+        {**base, "model_id": "org/a", "resolved_revision": "c" * 40},  # same spec, new commit
+        {**base, "model_id": "org/a", "label": "Y"},  # same model, another label
+        {**base, "model_id": "org/odd", "resolved_revision": None},
+    ]
+    for m in metas:
+        score.load_detector(m, "onnx-int8", tmp_path)
+    assert len(set(dirs)) == len(metas)
+    assert all(d.parent == tmp_path and re.fullmatch(r"[A-Za-z0-9_.-]+", d.name) for d in dirs)
+    assert dirs[-1].name.endswith("-unresolved")
+
+
+@pytest.mark.parametrize(
+    ("torch_p", "onnx_p"),
+    [
+        ([0.5, 0.9], [0.5, math.nan]),
+        ([0.5, 0.9], [math.nan, 0.9]),  # a NaN first: max() would skip it after a number
+        ([math.inf, 0.9], [0.5, 0.9]),
+        ([0.5, math.nan], [0.5, math.nan]),  # NaN on both sides is still a broken export
+    ],
+)
+def test_check_export_rejects_non_finite(
+    torch_p: list[float], onnx_p: list[float], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(score.OnnxExportError):
+        score.check_export("org/m", torch_p, onnx_p)
+    out = capsys.readouterr().out
+    assert out.startswith("::error::org/m: the export check produced a non-finite probability")
+    assert "not quantising" in out
+
+
+def test_export_check_windows_respect_max_length() -> None:
+    short = score.export_check_windows(1000, 1, 2, max_length=128)
+    assert [len(w) for w in short] == [128, 128, 64, 7]
+    assert all(w[0] == 1 and w[-1] == 2 for w in short)
+    tiny = score.export_check_windows(1000, 1, 2, max_length=2)
+    assert all(w == [1, 2] for w in tiny)
+    assert score.export_check_windows(1000, 1, 2) == score.export_check_windows(1000, 1, 2, 512)
 
 
 def test_check_export_fails_before_quantising(capsys: pytest.CaptureFixture[str]) -> None:
@@ -1178,6 +1227,48 @@ def test_one_bad_pair_does_not_stop_the_report() -> None:
     assert z["comparable"] is False and z["note"] == "summary not usable (KeyError)"
 
 
+def test_duplicate_runs_are_not_compared() -> None:
+    a, b = _cls("torch-fp32", SCORES_A), _cls("onnx-int8", SCORES_B)
+    y_a, y_b = {**a, "label": "Y"}, {**b, "label": "Y"}
+    (dup, ok) = score.compare_runtimes([a, b, _cls("onnx-int8", SCORES_A), y_a, y_b])
+    assert dup["spec"] == "org/m@main:X" and dup["comparable"] is False
+    assert (
+        dup["note"] == "not comparable: duplicate runs"
+        and dup["runtime"] == "onnx-int8, torch-fp32"
+    )
+    assert ok["spec"] == "org/m@main:Y" and ok["comparable"] is True  # the others still render
+    table = score.render_compare([dup, ok])
+    assert "**not comparable: duplicate runs**" in table and "### org/m@main:Y" in table
+
+
+def test_duplicate_score_records_are_not_compared(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _summary_file(tmp_path / "a.json", 3, [_cls("torch-fp32", SCORES_A)])
+    _summary_file(tmp_path / "b.json", 3, [_cls("onnx-int8", SCORES_B)])
+    (tmp_path / "s1.json").write_text(json.dumps(_scores("torch-fp32", SCORES_A)))
+    (tmp_path / "s2.json").write_text(json.dumps(_scores("onnx-int8", SCORES_B)))
+    (tmp_path / "s3.json").write_text(json.dumps(_scores("onnx-int8", SCORES_A)))
+    _, scores, _ = score.collect_results([tmp_path])
+    assert scores[("org/m@main:X", "onnx-int8")] == {"kind": score.DUPLICATE_RECORD}
+    assert score.main(["compare", str(tmp_path)]) == 0
+    assert "**not comparable: duplicate runs**" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("weights", [[None], "not-a-list", [{"file": "m", "sha256": None}, 3]])
+def test_malformed_weights_mark_only_that_pair(weights: Any) -> None:
+    bad_a, bad_b = _cls("torch-fp32", SCORES_A), _cls("onnx-int8", SCORES_B)
+    bad_a["weights"] = weights
+    good = [
+        {**_cls("torch-fp32", SCORES_A), "label": "Y"},
+        {**_cls("onnx-int8", SCORES_B), "label": "Y"},
+    ]
+    bad, ok = score.compare_runtimes([bad_a, bad_b, *good])
+    assert bad["comparable"] is False and bad["rows"] == []
+    assert bad["note"] == "summary not usable (AttributeError)"
+    assert ok["comparable"] is True and ok["rows"]
+
+
 def test_latency_caveat_when_cpus_differ() -> None:
     a, b = _cls("torch-fp32", SCORES_A), _cls("onnx-int8", SCORES_B)
     a["cpu_model"] = b["cpu_model"] = "CPU A"
@@ -1226,7 +1317,7 @@ def test_onnx_model_job_end_to_end_writes_scores_without_text(
         assert score.main([*argv, *_model_dirs(dirs, [OK_META])]) == 0
         paths[runtime] = (out, sc)
     printed = capsys.readouterr()
-    assert work == [tmp_path / "onnx"]
+    assert work == [tmp_path / "onnx" / score.model_work_name(OK_META)]
     summary = json.loads(paths["onnx-int8"][0].read_text())
     assert summary["schema"] == 3
     assert summary["environment"]["cpu_model"] == score.cpu_model()
@@ -1265,8 +1356,9 @@ def test_onnx_temp_dir_lives_as_long_as_the_detector(
             return super().evaluate(text)
 
     def fake_onnx(meta: dict[str, Any], label: str, work_dir: Path) -> Checking:
-        assert work_dir.is_dir()
-        seen.append(work_dir)
+        assert work_dir.parent.is_dir()  # the temporary directory; the model's own subdir
+        work_dir.mkdir()  # is created by the real loader
+        seen.append(work_dir.parent)
         return Checking("x")
 
     monkeypatch.setattr(score, "load_onnx_detector", fake_onnx)
