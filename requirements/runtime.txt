@@ -3,7 +3,7 @@
 litellm[proxy]==1.106.2
 # Prisma client + CLI wrapper for LiteLLM's database (the version LiteLLM 1.106.2 locks and
 # ships in its own images). The image bakes the CLI, engines and generated client at build.
-prisma==0.11.0
+prisma==0.15.0
 opentelemetry-sdk==1.45.1
 opentelemetry-exporter-otlp-proto-http==1.45.1
 # JWT verification in aegisx9.auth (custom_auth hook, ADR 0010). LiteLLM[proxy] allows these.
