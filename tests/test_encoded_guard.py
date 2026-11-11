@@ -225,3 +225,17 @@ def test_default_pipeline_blocks_encoded_injection() -> None:
     assert outcome.verdict is Verdict.BLOCK
     assert outcome.blocked_by in {"prompt_injection", "encoded_payload"}
     assert "encoded_payload" in {f.guard for f in outcome.findings}
+
+
+def test_uuids_are_not_decoded_as_hex() -> None:
+    # #210: a 4-byte UUID group is sometimes all letters. 2,000 runtime UUIDs, none blocked.
+    blocked = [u for u in (uuid.uuid4() for _ in range(2000)) if categories(f"request id {u}")]
+    assert blocked == []
+    # The same group outside a UUID is still decoded.
+    assert categories(f"hex: {b'rogue'.hex()} and id {uuid.uuid4()}") == {"encoded_text"}
+
+
+def test_letter_bytes_in_a_uuid_group_are_allowed() -> None:
+    group = b"wxyz".hex()  # 7778797a: has a hex letter, so the digits-only rule does not apply
+    assert categories(f"request id {group}-0000-4000-8000-000000000000") == set()
+    assert categories(f"hex: {group}") == {"encoded_text"}

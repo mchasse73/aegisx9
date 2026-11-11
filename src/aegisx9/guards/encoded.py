@@ -52,6 +52,13 @@ _HEX_BYTES = re.compile(
     r"|((?:%[0-9A-Fa-f]{2}){4,})"
 )
 
+# A canonical UUID. Its hex groups are identifiers, and a 4-byte group is sometimes all
+# letters, so hex spans inside one are never decoded (#210).
+_UUID = re.compile(
+    r"(?<![0-9A-Za-z-])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+    r"(?![0-9A-Za-z-])"
+)
+
 _MAX_SPAN_CHARS = 64 * 1024  # longer spans are decoded up to this prefix
 _MIN_DECODED_CHARS = 3
 _MIN_TEXTY_RATIO = 0.6  # letters, digits and whitespace / all characters
@@ -147,8 +154,11 @@ def _junk(ch: str) -> bool:
 
 def decoded_spans(text: str) -> Iterator[Decoded]:
     """Every encoded span in ``text`` that decodes to at least a few characters."""
+    uuids = [m.span() for m in _UUID.finditer(text)]
     for encoding, pattern, decode in _DECODERS:
         for match in pattern.finditer(text):
+            if encoding == "hex" and any(a <= match.start() and match.end() <= b for a, b in uuids):
+                continue
             span = next((g for g in match.groups() if g), match.group(0))
             for raw in decode(span):
                 decoded = raw.decode("utf-8", errors="replace")
