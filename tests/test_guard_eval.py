@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
+import re
 import secrets
 import sys
 from pathlib import Path
@@ -51,17 +53,46 @@ class Conv:
 
 
 class FakeTokenizer:
-    """One token per character; specials are 1 at the start and 2 at the end."""
+    """Models a transformers 5.x fast tokenizer called with ``return_overflowing_tokens``.
 
-    def __call__(self, text: str, add_special_tokens: bool = True) -> dict[str, list[int]]:
-        assert add_special_tokens is False
-        return {"input_ids": [ord(c) for c in text]}
+    One token per character. The post-processor adds 1 at the start and 2 at the end of every
+    window, so a window holds at most ``max_length - 2`` content ids. Each overflow window
+    starts ``stride`` ids before the end of the previous one, and the last may be short, as
+    in Hugging Face's tokenizers. ``overflow_to_sample_mapping`` gives each window's text.
+    """
 
-    def num_special_tokens_to_add(self, pair: bool = False) -> int:
-        return 2
+    specials = 2
 
-    def build_inputs_with_special_tokens(self, token_ids_0: list[int]) -> list[int]:
-        return [1, *token_ids_0, 2]
+    def __init__(self) -> None:
+        self.calls: list[int] = []  # texts per call
+
+    def __call__(
+        self,
+        texts: list[str],
+        *,
+        truncation: bool,
+        max_length: int,
+        stride: int,
+        return_overflowing_tokens: bool,
+        padding: bool | str,
+    ) -> dict[str, list[Any]]:
+        assert isinstance(texts, list)
+        assert truncation is True and return_overflowing_tokens is True and padding is False
+        content = max_length - self.specials
+        assert 0 <= stride < content  # the real tokenizer refuses this too
+        self.calls.append(len(texts))
+        input_ids: list[list[int]] = []
+        mapping: list[int] = []
+        for i, text in enumerate(texts):
+            ids = [ord(c) for c in text]
+            start = 0
+            while True:
+                input_ids.append([1, *ids[start : start + content], 2])
+                mapping.append(i)
+                if start + content >= len(ids):
+                    break
+                start += content - stride
+        return {"input_ids": input_ids, "overflow_to_sample_mapping": mapping}
 
 
 class KeywordDetector:
@@ -104,8 +135,34 @@ def test_prompt_text_shapes() -> None:
         build_sets.prompt_text(42)
 
 
-def test_dedupe_keeps_first_seen_order() -> None:
-    assert build_sets.dedupe(["b", "a", "b", "c", "a"]) == ["b", "a", "c"]
+def test_canonical_is_sorted_and_unique() -> None:
+    assert build_sets.canonical(["b", "a", "b", "c", "a"]) == ["a", "b", "c"]
+
+
+class ShuffledSource(FakeSource):
+    """The same prompts in another order, as garak's set-built snippet contexts come out."""
+
+    def __init__(self, marker: str, seed: int) -> None:
+        super().__init__(marker)
+        self.rng = random.Random(seed)  # noqa: S311
+
+    def probe_prompts(self, probe: str) -> list[str]:
+        texts = super().probe_prompts(probe)
+        self.rng.shuffle(texts)
+        return texts
+
+    def prompt_leaking(self) -> list[str]:
+        texts = super().prompt_leaking()
+        self.rng.shuffle(texts)
+        return texts
+
+
+def test_family_hash_and_indices_independent_of_input_order() -> None:
+    rows_a, stats_a = build_sets.attack_rows(ShuffledSource("m", 1))
+    rows_b, stats_b = build_sets.attack_rows(ShuffledSource("m", 2))
+    rows_c, stats_c = build_sets.attack_rows(FakeSource("m"))
+    assert rows_a == rows_b == rows_c  # same text at every index
+    assert stats_a == stats_b == stats_c  # same per-family sha256 and counts
 
 
 def test_families_match_adr_0024_totals() -> None:
@@ -222,8 +279,25 @@ def test_parse_models() -> None:
         "org/b@main:1",
         "org/c_d.e@v2:LABEL_1",
     ]
-    assert specs[0].slug == "org_model-a_0123abcd"
+    assert specs[0].slug == "org_model-a-" + _h("org/model-a@0123abcd:INJECTION")
     assert score.parse_models("") == []
+
+
+def _h(spec: str) -> str:
+    return hashlib.sha256(spec.encode()).hexdigest()[:12]
+
+
+def test_slugs_never_collide() -> None:
+    specs = [
+        "org_a/model@main:X",
+        "org/a_model@main:X",  # sanitises to the same name as the one above
+        "org/m@main:INJECTION",
+        "org/m@main:1",  # same model and revision, another label
+        "org/m@v2:1",
+    ]
+    slugs = [score.parse_spec(s).slug for s in specs]
+    assert len(set(slugs)) == len(slugs)
+    assert all(re.fullmatch(r"[A-Za-z0-9_.-]+-[0-9a-f]{12}", s) for s in slugs)
 
 
 @pytest.mark.parametrize(
@@ -239,8 +313,8 @@ def test_plan_command(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFix
     assert score.main(["plan"]) == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan == [
-        {"spec": "org/a@main:INJECTION", "slug": "org_a_main"},
-        {"spec": "org/b@abc:1", "slug": "org_b_abc"},
+        {"spec": "org/a@main:INJECTION", "slug": "org_a-" + _h("org/a@main:INJECTION")},
+        {"spec": "org/b@abc:1", "slug": "org_b-" + _h("org/b@abc:1")},
     ]
 
 
@@ -269,25 +343,28 @@ def test_resolve_label() -> None:
 # --------------------------------------------------------------------------- chunking
 
 
-def test_chunk_short_input_is_one_window() -> None:
-    assert score.chunk_ids([1, 2, 3], 5, 2) == [[1, 2, 3]]
-    assert score.chunk_ids([], 5, 2) == [[]]
+def _detector(calls: list[list[list[int]]], **kw: Any) -> score.HFClassifierDetector:
+    return score.HFClassifierDetector("m", FakeTokenizer(), _fires(calls), **kw)
 
 
-def test_chunk_windows_overlap_and_cover() -> None:
-    ids = list(range(23))
-    chunks = score.chunk_ids(ids, 10, 3)
-    assert all(len(c) <= 10 for c in chunks)
-    assert chunks[0] == list(range(10))
-    assert chunks[1][:3] == chunks[0][-3:]  # overlap
-    assert chunks[-1][-1] == 22  # last window ends at the last id
-    assert set().union(*map(set, chunks)) == set(ids)
+def test_windows_come_from_the_overflow_api() -> None:
+    det = _detector([], max_length=12, overlap=3)
+    # 23 content ids, 10 per window, 3 shared: windows start at 0, 7, 14.
+    text = "".join(chr(ord("A") + i) for i in range(23))
+    windows, owner = det.windows(["ab", text, ""])
+    assert owner == [0, 1, 1, 1, 2]
+    assert windows[0] == [1, ord("a"), ord("b"), 2]
+    long = windows[1:4]
+    assert all(len(w) <= 12 and w[0] == 1 and w[-1] == 2 for w in long)  # specials per window
+    assert long[1][1:4] == long[0][-4:-1]  # 3 ids shared with the previous window
+    assert long[-1][-2] == ord(text[-1])  # the text's last id is in the last window
+    assert set().union(*(set(w[1:-1]) for w in long)) == {ord(c) for c in text}
+    assert windows[4] == [1, 2]  # an empty prompt is still one window
 
 
-def test_chunk_rejects_bad_params() -> None:
-    for window, overlap in [(0, 0), (5, 5), (5, -1)]:
-        with pytest.raises(ValueError):
-            score.chunk_ids([1], window, overlap)
+def test_fake_tokenizer_refuses_what_the_real_one_refuses() -> None:
+    with pytest.raises(AssertionError):
+        _detector([], max_length=6, overlap=4).windows(["abc"])
 
 
 def _fires(calls: list[list[list[int]]]) -> score.Predict:
@@ -301,7 +378,7 @@ def _fires(calls: list[list[list[int]]]) -> score.Predict:
 
 def test_classifier_scores_max_over_windows() -> None:
     seen: list[list[list[int]]] = []
-    det = score.HFClassifierDetector("m", FakeTokenizer(), _fires(seen), max_length=12, overlap=2)
+    det = _detector(seen, max_length=12, overlap=2)
     out = det.evaluate("a" * 30 + "z")
     assert out.score == pytest.approx(0.97)
     assert out.chunks == len(seen[0]) > 1
@@ -312,20 +389,19 @@ def test_classifier_scores_max_over_windows() -> None:
 
 def test_batching_maps_scores_back_per_prompt() -> None:
     calls: list[list[list[int]]] = []
-    det = score.HFClassifierDetector(
-        "m", FakeTokenizer(), _fires(calls), max_length=12, overlap=2, batch_windows=4
-    )
-    # Window counts: 1, 1, 4 (long, z at the end), 1, 1 -> batches [1+1+4] and [1+1].
+    det = _detector(calls, max_length=12, overlap=2, batch_prompts=2)
+    # Groups of two prompts, one tokenizer call each. Window counts: 1, 1 | 4 (long, z at the
+    # end), 1 | 1.
     texts = ["ab", "zz", "a" * 30 + "z", "q", "r"]
     out = det.evaluate_many(texts)
-    assert [len(c) for c in calls] == [6, 2]
+    assert det._tok.calls == [2, 2, 1]  # type: ignore[attr-defined]
+    assert [len(c) for c in calls] == [2, 5, 1]
     assert [o.chunks for o in out] == [1, 1, 4, 1, 1]
     assert [o.score for o in out] == pytest.approx([0.1, 0.97, 0.97, 0.1, 0.1])
-    # Per-prompt latency is the batch time over its prompts; per chunk over its windows.
-    first = out[:3]
-    assert first[0].seconds == first[1].seconds == first[2].seconds
-    assert first[0].chunk_seconds == pytest.approx(first[0].seconds * 3 / 6)
-    assert out[3].seconds == out[4].seconds
+    # Per-prompt latency is the group time over its prompts; per chunk over its windows.
+    assert out[0].seconds == out[1].seconds and out[2].seconds == out[3].seconds
+    assert out[2].chunk_seconds == pytest.approx(out[2].seconds * 2 / 5)
+    assert out[0].chunk_seconds == pytest.approx(out[0].seconds)
     assert det.evaluate_many([]) == []
     assert score.run_detector(det, [score.Prompt("fp", "f", "zz")])[0].score == 0.97
 
@@ -671,6 +747,7 @@ def test_model_job_end_to_end_uses_recorded_heuristics(
     assert rc == 0  # report-only
     assert marker not in printed.out + printed.err + out.read_text() + md.read_text()
     summary = json.loads(out.read_text())
+    assert "transformers" in summary["environment"]["packages"]  # the version garak brought
     assert summary["heuristics"] is None
     (cls,) = summary["classifiers"]
     assert cls["weights"] == OK_META["weights"] and cls["resolved_revision"] == "b" * 40

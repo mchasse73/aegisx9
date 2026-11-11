@@ -72,8 +72,8 @@ Each model runs in its own job in the `guard-eval` environment (main only; Terra
 
 Latency is reported two ways:
 
-- batched: windows from many prompts, about 32 per batch, with each batch's time divided by its
-  prompts;
+- batched: groups of 32 prompts, tokenized in one call into the tokenizer's own overflow
+  windows and scored together, with each group's time divided by its prompts;
 - one prompt at a time: a fixed sample of 200 prompts, which is what a gateway sidecar would
   see.
 

@@ -60,9 +60,15 @@ def prompt_text(prompt: Any) -> str:
     raise TypeError(type(prompt).__name__)
 
 
-def dedupe(texts: Iterable[str]) -> list[str]:
-    """Unique texts in first-seen order (promptinject repeats each text per config id)."""
-    return list(dict.fromkeys(texts))
+def canonical(texts: Iterable[str]) -> list[str]:
+    """A family's unique texts, sorted.
+
+    promptinject repeats each text per config id, and garak's FactSnippet probes build their
+    contexts in a ``set``, whose order changes from process to process with string hashing.
+    Sorting makes indices and hashes the same in every process, so a model job's rebuilt
+    sets match the heuristics job's verdicts.
+    """
+    return sorted(set(texts))
 
 
 def promptfoo_attacks(path: Path) -> list[str]:
@@ -139,7 +145,7 @@ def attack_rows(
             raw = promptfoo_attacks(ROOT / "redteam/promptfoo/attacks/prompt-injection.yaml")
         else:
             raise ValueError(fam.name)
-        texts = dedupe(raw)
+        texts = canonical(raw)
         rows.extend({"set": fam.set, "family": fam.name, "text": t} for t in texts)
         stats[fam.name] = {
             "set": fam.set,

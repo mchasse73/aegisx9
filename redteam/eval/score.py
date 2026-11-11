@@ -5,10 +5,11 @@ Detectors:
   for a request with one user message (``AegisGuard.pre_call`` on ``default_pipeline``). A
   prompt counts as blocked when the hook refuses it.
 - ``HFClassifierDetector``: a Hugging Face sequence classifier at a pinned revision. Each
-  prompt is split into windows of the model's context (512 tokens by default) with overlap;
-  its score is the injection probability of its highest-scoring window. Windows from many
-  prompts are batched together (about 32 per batch); a separate sample of prompts scored one
-  at a time gives the latency a gateway sidecar would see.
+  prompt is split by the tokenizer's own overflow windows (512 tokens by default, special
+  tokens included) with overlap; its score is the injection probability of its
+  highest-scoring window. Groups of 32 prompts are tokenized together and their windows
+  batched; a separate sample of prompts scored one at a time gives the latency a gateway
+  sidecar would see.
 
 The summary records block counts and rates per family and corpus, the classifier at several
 thresholds, "heuristics OR classifier" (from the heuristics job's per-prompt outcomes, so the
@@ -38,7 +39,7 @@ import sys
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -104,7 +105,13 @@ class ModelSpec:
 
     @property
     def slug(self) -> str:
-        return re.sub(r"[^A-Za-z0-9_.-]", "_", f"{self.model_id}@{self.revision}")
+        """Sanitised model name plus a hash of the whole spec (label included).
+
+        Sanitising alone collides (``org_a/m`` and ``org/a_m``; one model with two labels),
+        and parallel matrix jobs would then upload to the same artifact name.
+        """
+        name = re.sub(r"[^A-Za-z0-9_.-]", "_", self.model_id)
+        return f"{name}-{hashlib.sha256(str(self).encode()).hexdigest()[:12]}"
 
     def __str__(self) -> str:
         return f"{self.model_id}@{self.revision}:{self.label}"
@@ -162,32 +169,27 @@ class HeuristicDetector:
 
 
 class Tokenizer(Protocol):
-    def __call__(self, text: str, add_special_tokens: bool = ...) -> Any: ...
-    def num_special_tokens_to_add(self, pair: bool = ...) -> int: ...
-    def build_inputs_with_special_tokens(self, token_ids_0: list[int]) -> list[int]: ...
+    """The Hugging Face tokenizer call the detector uses (transformers 5.x, fast backend).
+
+    With ``return_overflowing_tokens=True`` a long text comes back as several windows of at
+    most ``max_length`` ids (special tokens included, added by the post-processor), each
+    sharing ``stride`` ids with the previous one. ``overflow_to_sample_mapping`` gives each
+    window's index in ``texts``.
+    """
+
+    def __call__(
+        self,
+        texts: list[str],
+        *,
+        truncation: bool,
+        max_length: int,
+        stride: int,
+        return_overflowing_tokens: bool,
+        padding: bool | str,
+    ) -> Mapping[str, Any]: ...
 
 
 Predict = Callable[[list[list[int]]], list[float]]
-
-
-def chunk_ids(ids: Sequence[int], window: int, overlap: int) -> list[list[int]]:
-    """Windows of at most ``window`` ids, each overlapping the previous by ``overlap``.
-
-    Every id lands in at least one window, and the last window ends at the last id.
-    """
-    if window <= 0 or not 0 <= overlap < window:
-        raise ValueError("need window > 0 and 0 <= overlap < window")
-    ids = list(ids)
-    if len(ids) <= window:
-        return [ids]
-    step = window - overlap
-    chunks = []
-    start = 0
-    while True:
-        chunks.append(ids[start : start + window])
-        if start + window >= len(ids):
-            return chunks
-        start = min(start + step, len(ids) - window)
 
 
 class HFClassifierDetector:
@@ -200,72 +202,63 @@ class HFClassifierDetector:
         predict: Predict,
         max_length: int = DEFAULT_MAX_LENGTH,
         overlap: int = DEFAULT_OVERLAP,
-        batch_windows: int = BATCH_WINDOWS,
+        batch_prompts: int = BATCH_WINDOWS,
     ) -> None:
         self.name = name
         self._tok = tokenizer
         self._predict = predict
-        self._window = max_length - tokenizer.num_special_tokens_to_add(pair=False)
+        self._max_length = max_length
         self._overlap = overlap
-        self._batch_windows = batch_windows
+        self._batch_prompts = batch_prompts
 
-    def windows(self, text: str) -> list[list[int]]:
-        ids = list(self._tok(text, add_special_tokens=False)["input_ids"])
-        return [
-            self._tok.build_inputs_with_special_tokens(c)
-            for c in chunk_ids(ids, self._window, self._overlap)
-        ]
+    def windows(self, texts: Sequence[str]) -> tuple[list[list[int]], list[int]]:
+        """Every window of every text, and the index of the text each one belongs to."""
+        enc = self._tok(
+            list(texts),
+            truncation=True,
+            max_length=self._max_length,
+            stride=self._overlap,
+            return_overflowing_tokens=True,
+            padding=False,  # predict pads each model batch to its own longest window
+        )
+        windows = [list(ids) for ids in enc["input_ids"]]
+        return windows, [int(i) for i in enc["overflow_to_sample_mapping"]]
+
+    def _score(self, texts: Sequence[str]) -> tuple[list[float], list[int], int, float]:
+        started = time.perf_counter()
+        windows, owner = self.windows(texts)
+        scores = self._predict(windows) if windows else []
+        best = [0.0] * len(texts)
+        counts = [0] * len(texts)
+        for window_score, i in zip(scores, owner, strict=True):
+            best[i] = window_score if counts[i] == 0 else max(best[i], window_score)
+            counts[i] += 1
+        return best, counts, len(windows), time.perf_counter() - started
 
     def evaluate(self, text: str) -> Outcome:
         """One prompt on its own, as the gateway would score a request."""
-        started = time.perf_counter()
-        windows = self.windows(text)
-        scores = self._predict(windows)
-        return Outcome(
-            score=max(scores), chunks=len(windows), seconds=time.perf_counter() - started
-        )
+        best, counts, _, elapsed = self._score([text])
+        return Outcome(score=best[0], chunks=counts[0], seconds=elapsed)
 
     def evaluate_many(self, texts: Sequence[str]) -> list[Outcome]:
-        """Score prompts with windows from many prompts in each batch.
+        """Score prompts in groups: one tokenizer call per group, windows batched together.
 
-        Prompts join a batch until it holds ``batch_windows`` windows (a long prompt can
-        overflow one batch; ``predict`` splits it). Each prompt's score is the max over its
-        own windows; its latency is the batch time divided by the prompts in the batch.
+        A group of ``batch_prompts`` prompts is tokenized in one call; their windows go to
+        ``predict`` together (it splits them into model batches of ``BATCH_WINDOWS``). Each
+        prompt's score is the max over its own windows, found through
+        ``overflow_to_sample_mapping``. Its latency is the group's time divided by the
+        prompts in it; per chunk, by the windows in it.
         """
         outcomes: list[Outcome] = []
-        group: list[list[list[int]]] = []
-        group_seconds = 0.0
-
-        def flush() -> None:
-            nonlocal group, group_seconds
-            if not group:
-                return
-            flat = [w for ws in group for w in ws]
-            started = time.perf_counter()
-            scores = self._predict(flat)
-            elapsed = group_seconds + time.perf_counter() - started
+        for start in range(0, len(texts), self._batch_prompts):
+            group = texts[start : start + self._batch_prompts]
+            best, counts, n_windows, elapsed = self._score(group)
             per_prompt = elapsed / len(group)
-            per_chunk = elapsed / len(flat)
-            i = 0
-            for ws in group:
-                outcomes.append(
-                    Outcome(
-                        score=max(scores[i : i + len(ws)]),
-                        chunks=len(ws),
-                        seconds=per_prompt,
-                        chunk_seconds=per_chunk,
-                    )
-                )
-                i += len(ws)
-            group, group_seconds = [], 0.0
-
-        for text in texts:
-            started = time.perf_counter()
-            group.append(self.windows(text))
-            group_seconds += time.perf_counter() - started
-            if sum(len(ws) for ws in group) >= self._batch_windows:
-                flush()
-        flush()
+            per_chunk = elapsed / max(n_windows, 1)
+            outcomes.extend(
+                Outcome(score=b, chunks=c, seconds=per_prompt, chunk_seconds=per_chunk)
+                for b, c in zip(best, counts, strict=True)
+            )
         return outcomes
 
 
