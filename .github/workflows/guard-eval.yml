@@ -52,7 +52,7 @@ env:
 jobs:
   heuristics:
     name: heuristics vs ADR 0024
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -111,7 +111,7 @@ jobs:
   plan:
     name: plan model jobs
     if: github.event_name == 'workflow_dispatch' && inputs.models != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -142,7 +142,7 @@ jobs:
       && needs.plan.result == 'success'
       && needs.plan.outputs.matrix != '[]'
       && (needs.heuristics.result == 'success' || needs.heuristics.result == 'failure')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: guard-eval
     timeout-minutes: 300
     strategy:
