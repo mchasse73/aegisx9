@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Staging gateway team `pass-income`: $40 per 30 days, Sonnet 5.5 by default, for a weekly scheduled scout agent. The allocation is now $165 of the $180 cap. Its federated machine identity follows (refs #203).
+
 ### Changed
 - Staging runs v0.6.0 (digest `sha256:12de7225…`, the signed index the 0.6.0 tag points at), so the embedded-instruction and instruction-echo guards are live there (#179, #195).
 
