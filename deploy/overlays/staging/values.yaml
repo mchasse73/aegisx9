@@ -21,7 +21,7 @@ gateway:
     # The owner's Anthropic credits are $200/month; the gateway stops at $180 per 30 days.
     proxyMaxBudgetUsd: 180
     budgetDuration: 30d
-    # $20 + $30 + $75 allocated; the remaining $55 is deliberately unallocated headroom.
+    # $20 + $30 + $75 + $40 allocated; the remaining $15 is deliberately unallocated headroom.
     # Applied by the budget bootstrap Job after each sync.
     consumers:
       - teamId: public-chat
@@ -42,6 +42,13 @@ gateway:
         maxBudgetUsd: 75
         memberBudgetUsd: 25
         models: [claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5]
+        defaultModel: claude-sonnet-5-5
+      # A weekly headless scout agent on a host cron (#203). Its identity is a federated
+      # 15-minute token (issuer #3, pending); no static key.
+      - teamId: pass-income
+        alias: Pass-income scout
+        maxBudgetUsd: 40
+        models: [claude-sonnet-5-5, claude-haiku-5-5]
         defaultModel: claude-sonnet-5-5
     jobs:
       enabled: true
