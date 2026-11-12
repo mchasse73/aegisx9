@@ -80,24 +80,40 @@ Latency is reported two ways:
 Model results are report-only, and a word list that isn't pinned marks their false-positive rows
 "unpinned corpus". Empty `models` runs the heuristics alone.
 
-**Runtimes** (#211), input `runtimes` (default `torch-fp32,onnx-int8`; an unknown value fails
-the plan job). Each model × runtime is its own job, with up to 350 minutes:
+**Runtimes** (#211, #213), input `runtimes` (default `torch-fp32,onnx-fp32,onnx-int8`; an
+unknown value fails the plan job). Each model × runtime is its own job, with up to 350 minutes:
 
 - `torch-fp32`: the published weights in torch, as before.
-- `onnx-int8`: the runtime the classifier sidecar will use (#198). It takes a Hugging Face
-  sequence classifier whose weights fit a single-file ONNX export. Protobuf limits that file to
-  2 GB, so the job fails with an error, before exporting, when the weights would take more than
-  1.8 GB in fp32 (counted from the safetensors headers). The job exports the downloaded weights
-  offline to ONNX with torch's default exporter at opset 20, with dynamic batch and sequence
-  axes and inputs `input_ids` and `attention_mask`. Before quantising, it checks the fp32
-  export against torch on four fixed windows and fails if any probability differs by more than
-  0.001 or isn't finite. The check windows are no longer than the model's own maximum
-  length. It then quantises with onnxruntime's `quantize_dynamic` (QInt8 weights, per-tensor) and
-  scores with an onnxruntime CPU session. Chunking, batching, thresholds and latency are the
-  same code as torch's. The summary records:
-  - the int8 and fp32 files' sha256 and sizes;
+- `onnx-fp32` and `onnx-int8` share one export path. They take a Hugging Face sequence
+  classifier whose weights fit a single-file ONNX export. Protobuf limits that file to 2 GB, so
+  the job fails with an error, before exporting, when the weights would take more than 1.8 GB in
+  fp32 (counted from the safetensors headers). The job exports the downloaded weights offline to
+  ONNX with torch's default exporter at opset 20, with dynamic batch and sequence axes and inputs
+  `input_ids` and `attention_mask`. It then checks the fp32 export against torch on four fixed
+  windows and fails if any probability differs by more than 0.001 or isn't finite. The check
+  windows are no longer than the model's own maximum length. Chunking, batching, thresholds and
+  latency are the same code as torch's.
+  - `onnx-fp32` scores the export unquantised with an onnxruntime CPU session: the accuracy and
+    latency baseline of ONNX itself. Its `onnx.quantization` says `{"method": "none", "applied":
+    false}`, and `onnx.file`, `sha256` and `bytes` are the fp32 export's.
+  - `onnx-int8` is the sidecar's candidate runtime (#198). It quantises the export with
+    onnxruntime's `quantize_dynamic`, every setting explicit: QInt8 weights, per channel (each
+    weight's output axis), `reduce_range` off, `op_types_to_quantize` `MatMul` and `Gemm`, and
+    `MatMulConstBOnly` (only MatMuls with a constant weight; attention's activation × activation
+    MatMuls stay fp32). The embedding Gather isn't quantised. In dynamic mode onnxruntime
+    rewrites each Gemm as MatMul + Add first, so Gemm layers (pooler, classifier head) are
+    quantised as MatMuls. A MatMul whose weight reaches it through a Transpose isn't
+    constant-weight to the quantiser and stays fp32. The defaults (per-tensor, every supported op,
+    Gather included) collapsed deberta-v3-base's scores (#213): at ≥0.9 they blocked no target
+    prompt, where fp32 blocked 58%. `onnx.ops` counts the tracked node types before and after
+    quantising, so the summary shows what changed. onnxruntime's docs say 7-bit weights
+    (`reduce_range`) may help on CPUs without VNNI, especially per channel, so each summary also
+    records `environment.cpu_vnni`.
+
+  The summary records:
+  - the scored and fp32 files' sha256 and sizes;
   - the opset and the onnx, onnxscript and onnxruntime versions;
-  - the quantisation settings;
+  - the quantisation settings (or that none were applied);
   - the check's result and tolerance;
   - the source weights' sha256.
 
@@ -107,7 +123,7 @@ the plan job). Each model × runtime is its own job, with up to 350 minutes:
 
 Each model job also uploads its per-prompt scores, keyed by set, family and index, with no text.
 A final report-only job (`score.py compare`) shows each model's runtimes side by side, with
-torch-fp32 as the baseline:
+torch-fp32 as the baseline for both ONNX runtimes:
 
 - for each threshold and set: both block rates, the delta in percentage points, and the share
   of prompts whose block decision differs;

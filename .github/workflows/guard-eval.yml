@@ -9,7 +9,7 @@
 #   list isn't the pinned one (the false-positive results are then invalid). A hold-out count
 #   that differs is a warning, shown in the summary.
 # - workflow_dispatch: the same heuristics job (run once; it uploads per-prompt verdicts, no
-#   text), plus one report-only job per model in `models` and runtime in `runtimes` (#211),
+#   text), plus one report-only job per model in `models` and runtime in `runtimes` (#211, #213),
 #   which uses those verdicts for the "OR heuristics" figures. Model jobs run in the
 #   `guard-eval` environment (main only, in Terraform), whose HF_TOKEN secret reaches only the
 #   download step, through env. Without a token a gated model is skipped with a warning; any
@@ -40,11 +40,12 @@ on:
         default: ""
       runtimes:
         description: >-
-          Classifier runtimes, comma-separated: torch-fp32 (the published weights) and/or
-          onnx-int8 (exported to ONNX, dynamic int8, onnxruntime on CPU: the sidecar's
-          runtime). Each model x runtime is its own job.
+          Classifier runtimes, comma-separated: torch-fp32 (the published weights),
+          onnx-fp32 (exported to ONNX, unquantised, onnxruntime on CPU) and/or onnx-int8 (the
+          same export with dynamic int8, per-channel MatMul/Gemm weights: the sidecar's
+          candidate runtime). Each model x runtime is its own job.
         required: false
-        default: "torch-fp32,onnx-int8"
+        default: "torch-fp32,onnx-fp32,onnx-int8"
 
 permissions:
   contents: read
@@ -57,7 +58,8 @@ env:
   PYTHON_VERSION: "3.12"
   GARAK_VERSION: "0.17.1"
   TORCH_VERSION: "2.15.0" # CPU build, as in redteam-staging.yml (#184)
-  # onnx-int8 jobs only (#211): torch's default ONNX exporter needs onnxscript (and onnx-ir).
+  # onnx-fp32 and onnx-int8 jobs only (#211, #213): torch's default ONNX exporter needs
+  # onnxscript (and onnx-ir).
   ONNX_VERSION: "1.23.2"
   ONNXSCRIPT_VERSION: "0.7.2"
   ONNX_IR_VERSION: "1.1.0"
@@ -178,7 +180,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq wamerican
       # garak builds the sets and brings transformers and huggingface_hub at the versions it
       # pins against. The gateway package isn't installed: no heuristic pass runs here.
-      # onnx-int8 jobs add the pinned exporter and runtime; torch-fp32 jobs stay as before.
+      # The ONNX jobs add the pinned exporter and runtime; torch-fp32 jobs stay as before.
       - name: install eval tools
         timeout-minutes: 20
         shell: bash
@@ -189,7 +191,7 @@ jobs:
           pip="${RUNNER_TEMP}/eval/bin/pip"
           "$pip" install -q --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}"
           "$pip" install -q "garak==${GARAK_VERSION}"
-          if [ "${RUNTIME}" = "onnx-int8" ]; then
+          if [ "${RUNTIME}" = "onnx-fp32" ] || [ "${RUNTIME}" = "onnx-int8" ]; then
             "$pip" install -q "onnx==${ONNX_VERSION}" "onnxscript==${ONNXSCRIPT_VERSION}" \
               "onnx-ir==${ONNX_IR_VERSION}" "onnxruntime==${ONNXRUNTIME_VERSION}"
           fi
@@ -218,9 +220,9 @@ jobs:
           [ -n "${HF_TOKEN}" ] || unset HF_TOKEN
           "${RUNNER_TEMP}/eval/bin/python" -m redteam.eval.score download \
             --model "${MODEL_SPEC}" --cache-dir "${RUNNER_TEMP}/models"
-      # Report-only: the numbers don't fail the job; only a crash does. onnx-int8 exports
-      # the downloaded weights offline and quantises them in the work dir (not uploaded:
-      # the summary carries their sha256). The scores file holds per-prompt scores keyed by
+      # Report-only: the numbers don't fail the job; only a crash does. The ONNX runtimes
+      # export the downloaded weights offline in the work dir, and onnx-int8 quantises them
+      # there (not uploaded: the summary carries their sha256). The scores file holds per-prompt scores keyed by
       # set/family/index, no text, for the runtime comparison.
       - name: score the model
         env:

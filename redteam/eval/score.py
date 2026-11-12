@@ -9,18 +9,19 @@ Detectors:
   tokens included) with overlap; its score is the injection probability of its
   highest-scoring window. Groups of 32 prompts are tokenized together and their windows
   batched; a separate sample of prompts scored one at a time gives the latency a gateway
-  sidecar would see. Two runtimes score the windows behind the same ``predict`` callable
-  (#211): ``torch-fp32`` (the weights as published) and ``onnx-int8`` (the weights exported
-  to ONNX, dynamically quantised to int8 and run by onnxruntime on CPU, as the sidecar
-  would run them).
+  sidecar would see. Three runtimes score the windows behind the same ``predict`` callable
+  (#211, #213): ``torch-fp32`` (the weights as published), ``onnx-fp32`` (the weights
+  exported to ONNX and run unquantised by onnxruntime on CPU) and ``onnx-int8`` (the same
+  export, dynamically quantised to int8, as the sidecar would run it).
 
 The summary records block counts and rates per family and corpus, the classifier at several
 thresholds, "heuristics OR classifier" (from the heuristics job's per-prompt outcomes, so the
 heuristic pass runs once per dispatch), latency, and the model's resolved revision and the
-sha256 of every weights file (for onnx-int8, also the exported and quantised files' sha256,
-the opset and the onnx/onnxruntime versions). Prompt text is never printed or written to the
-summary. ``run --scores-out`` writes a classifier's per-prompt scores keyed by set, family and
-index (no text), which ``compare`` uses for the share of decisions two runtimes disagree on.
+sha256 of every weights file (for the ONNX runtimes, also the exported (and quantised) files'
+sha256, the opset, the quantisation settings and the onnx/onnxruntime versions). Prompt text
+is never printed or written to the summary. ``run --scores-out`` writes a classifier's
+per-prompt scores keyed by set, family and index (no text), which ``compare`` uses for the
+share of decisions two runtimes disagree on.
 
 Gate (``run --gate``, heuristics): every target family 100% blocked, no false positive, the
 word list matches its pin, and every target family has ADR 0024's count. A hold-out count
@@ -69,20 +70,45 @@ _SPEC = re.compile(
 # Top-level files a classifier needs; weights only as safetensors (no pickled .bin).
 _MODEL_FILE = re.compile(r"^[^/]+\.(json|model|txt|safetensors)$")
 _GATED = "gated model and no HF_TOKEN in the guard-eval environment"
-# Schema 3 adds each classifier's ``runtime`` (and ``onnx`` for onnx-int8). A schema 2
+# Schema 3 adds each classifier's ``runtime`` (and ``onnx`` for the ONNX runtimes). A schema 2
 # summary has no runtime and is read as torch-fp32.
 SCHEMA = 3
 READABLE_SCHEMAS = (2, 3)
-TORCH_FP32, ONNX_INT8 = "torch-fp32", "onnx-int8"
-RUNTIMES = (TORCH_FP32, ONNX_INT8)
+TORCH_FP32, ONNX_FP32, ONNX_INT8 = "torch-fp32", "onnx-fp32", "onnx-int8"
+RUNTIMES = (TORCH_FP32, ONNX_FP32, ONNX_INT8)
+ONNX_RUNTIMES = (ONNX_FP32, ONNX_INT8)  # both export the same way; only int8 quantises
 ONNX_OPSET = 20
-# Dynamic int8 quantisation as the sidecar will run it; recorded in the summary.
+# Dynamic int8 quantisation as the sidecar will run it; every setting is passed explicitly
+# and recorded in the summary. #213: the defaults (per-tensor, every op, the embedding Gather
+# included) collapsed deberta-v3-base's scores in run 43126456554, so only the weight-constant
+# MatMul/Gemm layers are quantised, per output channel (the weight's last axis, which
+# onnxruntime uses for MatMul without an extra option). MatMulConstBOnly keeps the
+# activation x activation MatMuls (attention scores) in fp32. In dynamic mode onnxruntime
+# 1.31.1 rewrites every Gemm as MatMul + Add before quantising (its IntegerOps registry has no
+# Gemm), so the Gemm layers are quantised as MatMuls; a MatMul whose weight reaches it through
+# a Transpose isn't constant-B and stays fp32. The recorded op counts show what changed.
 QUANTIZATION: dict[str, Any] = {
     "method": "onnxruntime.quantization.quantize_dynamic",
     "weight_type": "QInt8",
-    "per_channel": False,
+    "per_channel": True,
     "reduce_range": False,
+    "op_types_to_quantize": ["MatMul", "Gemm"],
+    "extra_options": {"MatMulConstBOnly": True},
 }
+# onnx-fp32 scores the export as it is.
+NO_QUANTIZATION: dict[str, Any] = {"method": "none", "applied": False}
+# Op types whose count is recorded before and after quantising, so the summary shows what
+# the quantiser changed (and that the embedding Gather didn't change).
+TRACKED_OPS = (
+    "MatMul",
+    "Gemm",
+    "Gather",
+    "MatMulInteger",
+    "DynamicQuantizeLinear",
+    "DynamicQuantizeMatMul",
+    "QGemm",
+    "DequantizeLinear",
+)
 EXPORT_CHECK_WINDOWS = (512, 300, 64, 7)  # window lengths for the fp32 export parity check
 EXPORT_CHECK_TOLERANCE = 1e-3  # max |p_torch - p_onnx_fp32| before quantising
 # protobuf caps a single-file ONNX model at 2 GB; leave room for the graph itself.
@@ -124,6 +150,25 @@ def cpu_model(cpuinfo: Path = Path("/proc/cpuinfo")) -> str:
     except OSError:
         pass
     return "unknown"
+
+
+def cpu_vnni(cpuinfo: Path = Path("/proc/cpuinfo")) -> bool | None:
+    """Whether the CPU has VNNI (``avx512_vnni`` or ``avx_vnni``), or None if unknown.
+
+    onnxruntime's ``quantize_dynamic`` docs say ``reduce_range`` (7-bit weights) "may improve
+    the accuracy for some models running on non-VNNI machine, especially for per-channel
+    mode", so an int8 result is read together with this flag (#213).
+    """
+    try:
+        with cpuinfo.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                key, sep, value = line.partition(":")
+                if sep and key.strip() == "flags":
+                    flags = set(value.split())
+                    return bool(flags & {"avx512_vnni", "avx_vnni"})
+    except OSError:
+        pass
+    return None
 
 
 def load_sets(directory: Path) -> tuple[dict[str, Any], list[Prompt]]:
@@ -425,7 +470,7 @@ def load_hf_detector(
 
 
 class OnnxExportError(Exception):
-    """The onnx-int8 path can't produce a faithful export; the job fails before quantising."""
+    """The ONNX runtimes can't produce a faithful export; the job fails before scoring it."""
 
 
 # safetensors dtypes: float tensors become 4 bytes per element in the fp32 export.
@@ -463,8 +508,8 @@ def check_onnx_size(meta: Mapping[str, Any]) -> int:
     if size > ONNX_MAX_SOURCE_BYTES:
         print(
             f"::error::{meta['model_id']}: its fp32 weights are {size / 1e9:.2f} GB; a "
-            "single-file ONNX export is limited to 2 GB (protobuf), so onnx-int8 takes models "
-            f"up to {ONNX_MAX_SOURCE_BYTES / 1e9:.1f} GB"
+            "single-file ONNX export is limited to 2 GB (protobuf), so the ONNX runtimes take "
+            f"models up to {ONNX_MAX_SOURCE_BYTES / 1e9:.1f} GB"
         )
         raise OnnxExportError("model too large for a single-file ONNX export")
     return size
@@ -478,20 +523,20 @@ def check_export(
 ) -> float:
     """The fp32 export's largest probability difference from torch; fails above ``tolerance``.
 
-    A broken export must stop the job before quantising, or its errors would be reported
-    as quantisation effects.
+    A broken export must stop the job before it is scored (onnx-fp32) or quantised
+    (onnx-int8), or its errors would be reported as runtime or quantisation effects.
     """
     if not all(math.isfinite(x) for x in (*torch_p, *onnx_p)):
         print(
             f"::error::{model_id}: the export check produced a non-finite probability "
-            f"(tolerance {tolerance:g}); not quantising"
+            f"(tolerance {tolerance:g}); not using the export"
         )
         raise OnnxExportError("non-finite probability in the export check")
     diff = max((abs(a - b) for a, b in zip(torch_p, onnx_p, strict=True)), default=0.0)
     if diff > tolerance:
         print(
             f"::error::{model_id}: the fp32 ONNX export differs from torch by {diff:.2e} "
-            f"(tolerance {tolerance:g}); not quantising"
+            f"(tolerance {tolerance:g}); not using the export"
         )
         raise OnnxExportError("fp32 ONNX export differs from torch")
     return diff
@@ -544,42 +589,116 @@ def export_onnx(
     return "torch.onnx.export (dynamo), value_info dropped", opset
 
 
-def load_onnx_detector(
-    meta: dict[str, Any], label: str, work_dir: Path
-) -> HFClassifierDetector:  # pragma: no cover - needs torch, onnxruntime and a model (CI only)
-    """Export the pinned weights to ONNX, quantise them to int8, score with onnxruntime (CPU).
+def quantize_settings(quant_type: Any) -> dict[str, Any]:
+    """``quantize_dynamic`` keyword arguments, from ``QUANTIZATION`` (all of them explicit).
 
-    Before quantising, the fp32 export is checked against torch on fixed windows
-    (``check_export``), so a broken export fails the job instead of passing for a
-    quantisation effect.
+    ``quant_type`` is onnxruntime's ``QuantType`` enum (passed in so this is testable without
+    onnxruntime); the weight type is looked up on it by the recorded name.
+    """
+    return {
+        "weight_type": getattr(quant_type, str(QUANTIZATION["weight_type"])),
+        "per_channel": bool(QUANTIZATION["per_channel"]),
+        "reduce_range": bool(QUANTIZATION["reduce_range"]),
+        "op_types_to_quantize": list(QUANTIZATION["op_types_to_quantize"]),
+        "extra_options": dict(QUANTIZATION["extra_options"]),
+    }
+
+
+def op_counts(op_types: Sequence[str]) -> dict[str, int]:
+    """How many nodes of each ``TRACKED_OPS`` type a graph has (zeros included)."""
+    return {op: sum(1 for t in op_types if t == op) for op in TRACKED_OPS}
+
+
+@dataclass(frozen=True)
+class OnnxFile:
+    """One ONNX file as the summary records it."""
+
+    name: str
+    sha256: str
+    bytes: int
+
+
+def onnx_record(
+    runtime: str,
+    exporter: str,
+    opset: int | None,
+    fp32: OnnxFile,
+    export_check: Mapping[str, Any],
+    int8: OnnxFile | None = None,
+    ops: Mapping[str, Mapping[str, int]] | None = None,
+) -> dict[str, Any]:
+    """The summary's ``onnx`` block for an ONNX runtime.
+
+    ``file``/``sha256``/``bytes`` name the file that was scored: the int8 file for
+    onnx-int8, the fp32 export itself for onnx-fp32 (whose ``quantization`` says none was
+    applied). The fp32 export is always recorded as ``fp32_*``.
+    """
+    if runtime not in ONNX_RUNTIMES or (int8 is None) != (runtime == ONNX_FP32):
+        raise ValueError("onnx-int8 records an int8 file, onnx-fp32 none")
+    scored = int8 or fp32
+    record: dict[str, Any] = {
+        "exporter": exporter,
+        "opset": opset,
+        "file": scored.name,
+        "sha256": scored.sha256,
+        "bytes": scored.bytes,
+        "fp32_file": fp32.name,
+        "fp32_sha256": fp32.sha256,
+        "fp32_bytes": fp32.bytes,
+        "quantization": json.loads(json.dumps(QUANTIZATION if int8 else NO_QUANTIZATION)),
+        "provider": "CPUExecutionProvider",
+        "versions": {d: package_version(d) for d in ("onnx", "onnxscript", "onnxruntime", "torch")},
+        "export_check": dict(export_check),
+    }
+    if ops is not None:
+        record["ops"] = {k: dict(v) for k, v in ops.items()}
+    return record
+
+
+def _graph_ops(path: Path) -> list[str]:  # pragma: no cover - needs onnx (CI only)
+    import onnx  # type: ignore[import-not-found,unused-ignore]
+
+    model = onnx.load(str(path))
+    ops = [n.op_type for n in model.graph.node]
+    ops += [n.op_type for f in model.functions for n in f.node]
+    del model
+    return ops
+
+
+def _session_logits(path: Path) -> Logits:  # pragma: no cover - needs onnxruntime (CI only)
+    import numpy as np  # type: ignore[import-not-found,unused-ignore]
+    import onnxruntime as ort  # type: ignore[import-not-found,unused-ignore]
+
+    sess = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+
+    def logits(ids: list[list[int]], mask: list[list[int]]) -> Any:
+        feed = {
+            "input_ids": np.asarray(ids, dtype=np.int64),
+            "attention_mask": np.asarray(mask, dtype=np.int64),
+        }
+        return sess.run(["logits"], feed)[0].tolist()
+
+    return logits
+
+
+def load_onnx_detector(
+    meta: dict[str, Any], label: str, work_dir: Path, runtime: str = ONNX_INT8
+) -> HFClassifierDetector:  # pragma: no cover - needs torch, onnxruntime and a model (CI only)
+    """Export the pinned weights to ONNX and score them with onnxruntime (CPU).
+
+    One export path for both ONNX runtimes: export, then check the fp32 export against
+    torch on fixed windows (``check_export``), so a broken export fails the job instead of
+    passing for a runtime or quantisation effect. onnx-fp32 then scores that file;
+    onnx-int8 quantises it first (``QUANTIZATION``) and scores the int8 file.
     """
     import gc
 
-    import numpy as np  # type: ignore[import-not-found,unused-ignore]
-    import onnxruntime as ort  # type: ignore[import-not-found,unused-ignore]
-    from onnxruntime.quantization import (  # type: ignore[import-not-found,unused-ignore]
-        QuantType,
-        quantize_dynamic,
-    )
-
+    if runtime not in ONNX_RUNTIMES:
+        raise ValueError("not an ONNX runtime")
     tok, model, index, pad, max_length = _load_hf(meta, label)
     work_dir.mkdir(parents=True, exist_ok=True)
-    fp32, int8 = work_dir / "model.onnx", work_dir / "model.int8.onnx"
+    fp32 = work_dir / "model.onnx"
     exporter, opset = export_onnx(model, fp32, max_length)
-    provider = "CPUExecutionProvider"
-
-    def session_logits(path: Path) -> Logits:
-        sess = ort.InferenceSession(str(path), providers=[provider])
-
-        def logits(ids: list[list[int]], mask: list[list[int]]) -> Any:
-            feed = {
-                "input_ids": np.asarray(ids, dtype=np.int64),
-                "attention_mask": np.asarray(mask, dtype=np.int64),
-            }
-            return sess.run(["logits"], feed)[0].tolist()
-
-        return logits
-
     check = export_check_windows(
         int(model.config.vocab_size),
         tok.cls_token_id if tok.cls_token_id is not None else 1,
@@ -587,36 +706,27 @@ def load_onnx_detector(
         max_length,
     )
     torch_p = make_predict(_torch_logits(model), pad, index)(check)
-    onnx_p = make_predict(session_logits(fp32), pad, index)(check)
+    onnx_p = make_predict(_session_logits(fp32), pad, index)(check)
     diff = check_export(meta["model_id"], torch_p, onnx_p)
     del model
     gc.collect()
-    quantize_dynamic(
-        str(fp32),
-        str(int8),
-        weight_type=QuantType.QInt8,
-        per_channel=bool(QUANTIZATION["per_channel"]),
-        reduce_range=bool(QUANTIZATION["reduce_range"]),
-    )
-    meta["onnx"] = {
-        "exporter": exporter,
-        "opset": opset,
-        "file": int8.name,
-        "sha256": sha256_file(int8),
-        "bytes": int8.stat().st_size,
-        "fp32_file": fp32.name,
-        "fp32_sha256": sha256_file(fp32),
-        "fp32_bytes": fp32.stat().st_size,
-        "quantization": dict(QUANTIZATION),
-        "provider": provider,
-        "versions": {d: package_version(d) for d in ("onnx", "onnxscript", "onnxruntime", "torch")},
-        "export_check": {
-            "windows": len(check),
-            "max_abs_prob_diff": diff,
-            "tolerance": EXPORT_CHECK_TOLERANCE,
-        },
-    }
-    predict = make_predict(session_logits(int8), pad, index)
+    export_check = {"windows": len(check), "max_abs_prob_diff": diff}
+    export_check["tolerance"] = EXPORT_CHECK_TOLERANCE
+    fp32_file = OnnxFile(fp32.name, sha256_file(fp32), fp32.stat().st_size)
+    scored = fp32
+    int8_file, ops = None, None
+    if runtime == ONNX_INT8:
+        from onnxruntime.quantization import (  # type: ignore[import-not-found,unused-ignore]
+            QuantType,
+            quantize_dynamic,
+        )
+
+        scored = work_dir / "model.int8.onnx"
+        quantize_dynamic(str(fp32), str(scored), **quantize_settings(QuantType))
+        int8_file = OnnxFile(scored.name, sha256_file(scored), scored.stat().st_size)
+        ops = {"fp32": op_counts(_graph_ops(fp32)), "int8": op_counts(_graph_ops(scored))}
+    meta["onnx"] = onnx_record(runtime, exporter, opset, fp32_file, export_check, int8_file, ops)
+    predict = make_predict(_session_logits(scored), pad, index)
     return HFClassifierDetector(meta["model_id"], tok, predict, max_length=max_length)
 
 
@@ -632,12 +742,16 @@ def model_work_name(meta: Mapping[str, Any]) -> str:
 def load_detector(
     meta: dict[str, Any], runtime: str, work_dir: Path | None = None
 ) -> HFClassifierDetector:
-    """The classifier on ``runtime``. onnx-int8 needs a work dir, which the caller owns."""
-    if runtime == ONNX_INT8:
+    """The classifier on ``runtime``. The ONNX runtimes need a work dir, which the caller owns."""
+    if runtime in ONNX_RUNTIMES:
         if work_dir is None:
-            raise ValueError("onnx-int8 needs a work dir")
+            raise ValueError("the ONNX runtimes need a work dir")
         check_onnx_size(meta)
-        return load_onnx_detector(meta, meta["label"], work_dir / model_work_name(meta))
+        # Per runtime too, so two ONNX runs sharing a work dir never share files.
+        files = work_dir / f"{model_work_name(meta)}-{runtime}"
+        return load_onnx_detector(meta, meta["label"], files, runtime)
+    if runtime != TORCH_FP32:
+        raise ValueError("unknown runtime")
     return load_hf_detector(meta, meta["label"])
 
 
@@ -1156,14 +1270,34 @@ def _classifier_lines(
         q = onnx.get("quantization") or {}
         versions = onnx.get("versions") or {}
         check = onnx.get("export_check") or {}
-        lines.append(
-            f"\nONNX int8: `{str(onnx.get('sha256'))[:12]}` ({onnx.get('bytes')} bytes), "
-            f"from fp32 export `{str(onnx.get('fp32_sha256'))[:12]}` "
-            f"({onnx.get('fp32_bytes')} bytes); opset {onnx.get('opset')}; "
+        common = (
+            f"opset {onnx.get('opset')}; "
             f"onnx {versions.get('onnx')}, onnxruntime {versions.get('onnxruntime')}; "
-            f"{q.get('weight_type')} weights, per-channel {q.get('per_channel')}; "
-            f"fp32 export vs torch: max |Δp| {check.get('max_abs_prob_diff')}"
         )
+        check_text = f"fp32 export vs torch: max |Δp| {check.get('max_abs_prob_diff')}"
+        if q.get("applied") is False:
+            lines.append(
+                f"\nONNX fp32: `{str(onnx.get('sha256'))[:12]}` ({onnx.get('bytes')} bytes), "
+                f"no quantisation; {common}{check_text}"
+            )
+        else:
+            ops = ", ".join(q.get("op_types_to_quantize") or []) or "all"
+            lines.append(
+                f"\nONNX int8: `{str(onnx.get('sha256'))[:12]}` ({onnx.get('bytes')} bytes), "
+                f"from fp32 export `{str(onnx.get('fp32_sha256'))[:12]}` "
+                f"({onnx.get('fp32_bytes')} bytes); {common}"
+                f"{q.get('weight_type')} weights, per-channel {q.get('per_channel')}, "
+                f"reduce-range {q.get('reduce_range')}, ops {ops}; {check_text}"
+            )
+            counts = onnx.get("ops") or {}
+            before, after = counts.get("fp32") or {}, counts.get("int8") or {}
+            shown = [
+                f"{op} {before.get(op, 0)} → {after.get(op, 0)}"
+                for op in TRACKED_OPS
+                if before.get(op) or after.get(op)
+            ]
+            if shown:
+                lines.append(f"\nnodes, fp32 → int8: {', '.join(shown)}")
     lines += [
         "",
         f"| set | family | {head} | OR heuristics ≥0.9 |",
@@ -1339,6 +1473,7 @@ def score(
             "python": sys.version.split()[0],
             "cpu_count": os.cpu_count(),
             "cpu_model": cpu_model(),
+            "cpu_vnni": cpu_vnni(),
             "packages": {
                 d: package_version(d)
                 for d in (
@@ -1369,7 +1504,7 @@ def score(
         # Without --work-dir, the ONNX files live in a temporary directory for as long as
         # the detectors do, and it is removed even when scoring fails.
         files_dir = work_dir
-        if files_dir is None and runtime == ONNX_INT8 and models:
+        if files_dir is None and runtime in ONNX_RUNTIMES and models:
             files_dir = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="onnx-")))
         for meta in models:
             if meta.get("status") != "ok":
@@ -1476,7 +1611,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--gate", action="store_true", help="fail on an ADR 0024 regression")
     run.add_argument("--runtime", choices=RUNTIMES, default=TORCH_FP32, help="classifier runtime")
     run.add_argument("--scores-out", help="write the model's per-prompt scores (no text)")
-    run.add_argument("--work-dir", type=Path, help="where onnx-int8 writes its ONNX files")
+    run.add_argument("--work-dir", type=Path, help="where the ONNX runtimes write their files")
     run.set_defaults(func=cmd_run)
     cmp = sub.add_parser("compare", help="runtime agreement from summaries and score records")
     cmp.add_argument("paths", type=Path, nargs="+", help="summary/score files or directories")
