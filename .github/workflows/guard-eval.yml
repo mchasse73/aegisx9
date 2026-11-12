@@ -167,7 +167,8 @@ jobs:
     timeout-minutes: 350
     strategy:
       fail-fast: false
-      max-parallel: 3
+      # Four runtimes per model; two models fit in one wave (the free tier allows 20 concurrent jobs).
+      max-parallel: 8
       matrix:
         model: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
