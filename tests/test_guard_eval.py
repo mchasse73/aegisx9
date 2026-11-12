@@ -316,20 +316,9 @@ def test_plan_command(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFix
     plan = json.loads(capsys.readouterr().out)
     a, b = "org_a-" + _h("org/a@main:INJECTION"), "org_b-" + _h("org/b@abc:1")
     assert plan == [
-        {
-            "spec": "org/a@main:INJECTION",
-            "slug": a,
-            "runtime": "torch-fp32",
-            "artifact": f"{a}-torch-fp32",
-        },
-        {
-            "spec": "org/a@main:INJECTION",
-            "slug": a,
-            "runtime": "onnx-int8",
-            "artifact": f"{a}-onnx-int8",
-        },
-        {"spec": "org/b@abc:1", "slug": b, "runtime": "torch-fp32", "artifact": f"{b}-torch-fp32"},
-        {"spec": "org/b@abc:1", "slug": b, "runtime": "onnx-int8", "artifact": f"{b}-onnx-int8"},
+        {"spec": spec, "slug": slug, "runtime": rt, "artifact": f"{slug}-{rt}"}
+        for spec, slug in (("org/a@main:INJECTION", a), ("org/b@abc:1", b))
+        for rt in ("torch-fp32", "onnx-fp32", "onnx-int8", "onnx-int8-rr")
     ]
     assert len({e["artifact"] for e in plan}) == len(plan)  # parallel uploads never collide
 
@@ -347,14 +336,28 @@ def test_plan_with_one_runtime(
 
 
 def test_parse_runtimes() -> None:
-    assert score.parse_runtimes("") == ["torch-fp32", "onnx-int8"]
-    assert score.parse_runtimes(None) == ["torch-fp32", "onnx-int8"]
-    assert score.parse_runtimes(" , ") == ["torch-fp32", "onnx-int8"]
+    every = ["torch-fp32", "onnx-fp32", "onnx-int8", "onnx-int8-rr"]
+    assert score.parse_runtimes("") == every
+    assert score.parse_runtimes(None) == every
+    assert score.parse_runtimes(" , ") == every
     assert score.parse_runtimes("onnx-int8,torch-fp32") == ["onnx-int8", "torch-fp32"]
+    assert score.parse_runtimes("onnx-fp32") == ["onnx-fp32"]
     assert score.parse_runtimes("torch-fp32\ntorch-fp32") == ["torch-fp32"]
-    for bad in ("onnx", "torch-fp32,tensorrt", "ONNX-INT8", "onnx-int8;id"):
-        with pytest.raises(ValueError, match="runtimes must be a list of: torch-fp32, onnx-int8"):
+    assert score.parse_runtimes("onnx-int8-rr,onnx-int8") == ["onnx-int8-rr", "onnx-int8"]
+    msg = "runtimes must be a list of: torch-fp32, onnx-fp32, onnx-int8, onnx-int8-rr"
+    for bad in ("onnx", "torch-fp32,tensorrt", "ONNX-INT8", "onnx-int8;id", "onnx-fp16"):
+        with pytest.raises(ValueError, match=msg):
             score.parse_runtimes(bad)
+
+
+def test_workflow_default_runtimes_match_the_code() -> None:
+    wf = (Path(__file__).parent.parent / ".github/workflows/guard-eval.yml").read_text()
+    (default,) = re.findall(r'default: "(torch-fp32[^"]*)"', wf)
+    assert score.parse_runtimes(default) == list(score.RUNTIMES) == score.parse_runtimes("")
+    # every ONNX job (and only those) installs the exporter and onnxruntime
+    assert 'case "${RUNTIME}" in\n            onnx-*)' in wf
+    assert all(rt.startswith("onnx-") for rt in score.ONNX_RUNTIMES)
+    assert not any(rt.startswith("onnx-") for rt in score.RUNTIMES if rt not in score.ONNX_RUNTIMES)
 
 
 def test_plan_fails_on_unknown_runtime(
@@ -365,7 +368,7 @@ def test_plan_fails_on_unknown_runtime(
     assert score.main(["plan"]) == 2
     printed = capsys.readouterr()
     assert printed.out == ""
-    assert "torch-fp32, onnx-int8" in printed.err
+    assert "torch-fp32, onnx-fp32, onnx-int8" in printed.err
     assert "gpu-fp16" not in printed.err  # the input isn't echoed
 
 
@@ -892,21 +895,34 @@ def test_load_detector_dispatches_on_runtime(
     seen: list[Any] = []
     monkeypatch.setattr(score, "load_hf_detector", lambda m, label: seen.append(("torch", label)))
     monkeypatch.setattr(
-        score, "load_onnx_detector", lambda m, label, d: seen.append(("onnx", label, d))
+        score,
+        "load_onnx_detector",
+        lambda m, label, d, rt: seen.append(("onnx", label, d, rt)),
     )
     monkeypatch.setattr(score, "check_onnx_size", lambda m: seen.append(("size",)))
     meta = {"model_id": "org/m", "revision": "main", "label": "X", "resolved_revision": "a" * 40}
     score.load_detector(meta, "torch-fp32")
     score.load_detector(meta, "onnx-int8", tmp_path)
-    sub = tmp_path / f"{score.parse_spec('org/m@main:X').slug}-{'a' * 40}"
-    assert seen == [("torch", "X"), ("size",), ("onnx", "X", sub)]  # size first
-    with pytest.raises(ValueError):
-        score.load_detector(meta, "onnx-int8")  # the caller owns the work dir
+    score.load_detector(meta, "onnx-fp32", tmp_path)
+    sub = f"{score.parse_spec('org/m@main:X').slug}-{'a' * 40}"
+    int8, fp32 = tmp_path / f"{sub}-onnx-int8", tmp_path / f"{sub}-onnx-fp32"
+    assert seen == [
+        ("torch", "X"),
+        ("size",),  # size first
+        ("onnx", "X", int8, "onnx-int8"),
+        ("size",),
+        ("onnx", "X", fp32, "onnx-fp32"),  # its own files, even in the same work dir
+    ]
+    for rt in score.ONNX_RUNTIMES:
+        with pytest.raises(ValueError):
+            score.load_detector(meta, rt)  # the caller owns the work dir
+    with pytest.raises(ValueError, match="unknown runtime"):
+        score.load_detector(meta, "tensorrt", tmp_path)
 
 
 def test_each_model_gets_its_own_work_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     dirs: list[Path] = []
-    monkeypatch.setattr(score, "load_onnx_detector", lambda m, label, d: dirs.append(d))
+    monkeypatch.setattr(score, "load_onnx_detector", lambda m, label, d, rt: dirs.append(d))
     monkeypatch.setattr(score, "check_onnx_size", lambda m: 1)
     base = {"revision": "main", "label": "X", "resolved_revision": "b" * 40}
     metas = [
@@ -920,7 +936,7 @@ def test_each_model_gets_its_own_work_dir(monkeypatch: pytest.MonkeyPatch, tmp_p
         score.load_detector(m, "onnx-int8", tmp_path)
     assert len(set(dirs)) == len(metas)
     assert all(d.parent == tmp_path and re.fullmatch(r"[A-Za-z0-9_.-]+", d.name) for d in dirs)
-    assert dirs[-1].name.endswith("-unresolved")
+    assert dirs[-1].name.endswith("-unresolved-onnx-int8")
 
 
 @pytest.mark.parametrize(
@@ -939,7 +955,7 @@ def test_check_export_rejects_non_finite(
         score.check_export("org/m", torch_p, onnx_p)
     out = capsys.readouterr().out
     assert out.startswith("::error::org/m: the export check produced a non-finite probability")
-    assert "not quantising" in out
+    assert "not using the export" in out
 
 
 def test_export_check_windows_respect_max_length() -> None:
@@ -958,7 +974,7 @@ def test_check_export_fails_before_quantising(capsys: pytest.CaptureFixture[str]
         score.check_export("org/m", [0.5, 0.9], [0.5, 0.95])
     out = capsys.readouterr().out
     assert out.startswith("::error::org/m: the fp32 ONNX export differs from torch by 5.00e-02")
-    assert "tolerance 0.001" in out and "not quantising" in out
+    assert "tolerance 0.001" in out and "not using the export" in out
     assert score.check_export("org/m", [], []) == 0.0
 
 
@@ -1019,6 +1035,14 @@ ONNX_META = {
     "provider": "CPUExecutionProvider",
     "versions": {"onnx": "1", "onnxruntime": "2"},
     "export_check": {"windows": 4, "max_abs_prob_diff": 1e-7, "tolerance": 1e-3},
+    "ops": {"fp32": {"MatMul": 3, "Gather": 1}, "int8": {"Gather": 1, "MatMulInteger": 3}},
+}
+ONNX_FP32_META = {
+    **{k: v for k, v in ONNX_META.items() if k != "ops"},
+    "file": "model.onnx",
+    "sha256": "e" * 64,
+    "bytes": 40,
+    "quantization": dict(score.NO_QUANTIZATION),
 }
 
 
@@ -1048,6 +1072,152 @@ def test_classifier_summary_records_runtime_and_onnx_pins() -> None:
     )
     assert "(label X) [onnx-int8]" in table and "(label X) [torch-fp32]" in table
     assert "ONNX int8: `dddddddddddd`" in table and "opset 20" in table
+    assert "per-channel True, reduce-range False, ops MatMul, Gemm" in table
+    assert "nodes, fp32 → int8: MatMul 3 → 0, Gather 1 → 1, MatMulInteger 0 → 3" in table
+    fp32 = _cls("onnx-fp32", [0.1] * 6, onnx=ONNX_FP32_META)
+    table = score.render_markdown(
+        {"sets": {"words": {"match": True}}, "heuristics": None, "classifiers": [fp32]}
+    )
+    assert "(label X) [onnx-fp32]" in table
+    assert "ONNX fp32: `eeeeeeeeeeee` (40 bytes), no quantisation; opset 20" in table
+    assert "ONNX int8" not in table and "nodes, fp32" not in table
+
+
+# --------------------------------------------------------------------------- quantisation (#213)
+
+
+def test_quantization_settings_are_pinned() -> None:
+    # Run 43126456554: the defaults (per-tensor, every op, Gather included) collapsed scores.
+    assert score.QUANTIZATION == {
+        "method": "onnxruntime.quantization.quantize_dynamic",
+        "applied": True,
+        "weight_type": "QInt8",
+        "per_channel": True,
+        "reduce_range": False,
+        "op_types_to_quantize": ["MatMul", "Gemm"],
+        "extra_options": {"MatMulConstBOnly": True},
+    }
+    assert "Gather" not in score.QUANTIZATION["op_types_to_quantize"]
+    assert score.NO_QUANTIZATION == {"method": "none", "applied": False}
+    by_rt = score.QUANTIZATION_BY_RUNTIME
+    assert by_rt["onnx-int8"] == score.QUANTIZATION
+    assert by_rt["onnx-int8-rr"] == {**score.QUANTIZATION, "reduce_range": True}  # only that
+    assert set(by_rt) == set(score.INT8_RUNTIMES)
+    by_rt["onnx-int8-rr"]["extra_options"]["x"] = 1  # a deep copy: int8 isn't affected
+    assert score.QUANTIZATION["extra_options"] == {"MatMulConstBOnly": True}
+    del by_rt["onnx-int8-rr"]["extra_options"]["x"]
+
+
+def test_quantize_settings_pass_every_setting_explicitly() -> None:
+    class QuantType:
+        QInt8, QUInt8 = "int8-enum", "uint8-enum"
+
+    kwargs = score.quantize_settings(QuantType, "onnx-int8")
+    rr = score.quantize_settings(QuantType, "onnx-int8-rr")
+    assert rr == {**kwargs, "reduce_range": True}
+    with pytest.raises(KeyError):
+        score.quantize_settings(QuantType, "onnx-fp32")  # nothing to quantise
+    assert kwargs == {
+        "weight_type": "int8-enum",
+        "per_channel": True,
+        "reduce_range": False,
+        "op_types_to_quantize": ["MatMul", "Gemm"],
+        "extra_options": {"MatMulConstBOnly": True},
+    }
+    kwargs["op_types_to_quantize"].append("Gather")  # onnxruntime may mutate what it gets
+    kwargs["extra_options"]["x"] = 1
+    assert score.QUANTIZATION["op_types_to_quantize"] == ["MatMul", "Gemm"]
+    assert score.QUANTIZATION["extra_options"] == {"MatMulConstBOnly": True}
+
+
+def test_op_counts() -> None:
+    ops = ["MatMul", "MatMul", "Gather", "Add", "MatMulInteger"]
+    counts = score.op_counts(ops)
+    assert set(counts) == set(score.TRACKED_OPS)  # zeros included, untracked ops ignored
+    assert counts["MatMul"] == 2 and counts["Gather"] == 1 and counts["MatMulInteger"] == 1
+    assert counts["Gemm"] == 0 and "Add" not in counts
+
+
+def test_graph_ops_reads_graph_and_functions() -> None:
+    from types import SimpleNamespace as NS
+
+    def nodes(*ops: str) -> NS:
+        return NS(node=[NS(op_type=op) for op in ops])
+
+    model = NS(graph=nodes("MatMul", "Gather"), functions=[nodes("MatMul")])
+    assert score.graph_ops(model) == ["MatMul", "Gather", "MatMul"]
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ({"MatMul": 36, "Gemm": 2}, {"MatMul": 36, "Gemm": 2}),  # nothing changed
+        ({"MatMul": 36, "Gemm": 2}, {"MatMul": 38, "Gemm": 0}),  # Gemm rewritten only
+        ({"MatMul": 36}, {"MatMul": 30}),  # fewer MatMuls but no integer node
+        ({"MatMul": 36}, {"MatMul": 36, "MatMulInteger": 1}),  # integer node, no fewer floats
+        ({}, {}),
+    ],
+)
+def test_int8_that_quantised_nothing_fails(
+    before: dict[str, int], after: dict[str, int], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(score.QuantizationError):
+        score.check_quantized("org/m", {"fp32": before, "int8": after})
+    out = capsys.readouterr().out
+    assert out.startswith("::error::org/m: quantize_dynamic quantised nothing")
+    assert "not scoring it as int8" in out
+    assert issubclass(score.QuantizationError, score.OnnxExportError)
+
+
+def test_int8_that_quantised_something_passes(capsys: pytest.CaptureFixture[str]) -> None:
+    # The tiny DeBERTa run: 36 MatMul + 2 Gemm -> 24 MatMul + 14 MatMulInteger.
+    ops = {"fp32": {"MatMul": 36, "Gemm": 2}, "int8": {"MatMul": 24, "MatMulInteger": 14}}
+    assert score.check_quantized("org/m", ops) is None
+    dyn = {"fp32": {"MatMul": 2}, "int8": {"MatMul": 1, "DynamicQuantizeMatMul": 1}}
+    assert score.check_quantized("org/m", dyn) is None
+    assert capsys.readouterr().out == ""
+
+
+def test_onnx_record_per_runtime() -> None:
+    fp32 = score.OnnxFile("model.onnx", "e" * 64, 40)
+    int8 = score.OnnxFile("model.int8.onnx", "d" * 64, 10)
+    check = {"windows": 4, "max_abs_prob_diff": 1e-9, "tolerance": 1e-3}
+    plain = score.onnx_record("onnx-fp32", "exp", 20, fp32, check)
+    assert (plain["file"], plain["sha256"], plain["bytes"]) == ("model.onnx", "e" * 64, 40)
+    assert (plain["fp32_sha256"], plain["fp32_bytes"]) == ("e" * 64, 40)
+    assert plain["quantization"] == {"method": "none", "applied": False} and "ops" not in plain
+    assert plain["export_check"] == check and plain["opset"] == 20
+    assert set(plain["versions"]) == {"onnx", "onnxscript", "onnxruntime", "torch"}
+    ops = {"fp32": {"MatMul": 3}, "int8": {"MatMul": 0}}
+    q = score.onnx_record("onnx-int8", "exp", 20, fp32, check, int8, ops)
+    assert (q["file"], q["sha256"], q["bytes"]) == ("model.int8.onnx", "d" * 64, 10)
+    assert q["fp32_sha256"] == "e" * 64 and q["ops"] == ops
+    assert q["quantization"] == score.QUANTIZATION
+    rr = score.onnx_record("onnx-int8-rr", "exp", 20, fp32, check, int8, ops)
+    assert rr["quantization"]["reduce_range"] is True and rr["quantization"]["applied"] is True
+    q["quantization"]["extra_options"]["x"] = 1  # a copy, not the module's settings
+    assert "x" not in score.QUANTIZATION["extra_options"]
+    for bad in (
+        ("onnx-int8", None),  # int8 needs its quantised file
+        ("onnx-fp32", int8),  # fp32 has none
+        ("torch-fp32", None),
+    ):
+        with pytest.raises(ValueError):
+            score.onnx_record(bad[0], "exp", 20, fp32, check, bad[1])
+
+
+def test_cpu_vnni(tmp_path: Path) -> None:
+    cases = {
+        "flags\t\t: fpu sse2 avx2 avx512f avx512_vnni\n": True,
+        "flags\t\t: fpu avx2 avx_vnni\n": True,
+        "flags\t\t: fpu sse2 avx2\n": False,
+        "processor\t: 0\nFeatures\t: fp asimd\n": None,  # no x86 flags line
+    }
+    for i, (text, want) in enumerate(cases.items()):
+        f = tmp_path / f"cpuinfo{i}"
+        f.write_text(text)
+        assert score.cpu_vnni(f) is want
+    assert score.cpu_vnni(tmp_path / "missing") is None
 
 
 SCORES_A = [0.99, 0.6, 0.85, 0.2, 0.3, 0.92]
@@ -1114,10 +1284,19 @@ def test_compare_without_scores_reports_rate_deltas_only() -> None:
     assert "rate deltas only" in score.render_compare([c])
 
 
-def test_compare_baseline_without_torch() -> None:
+def test_compare_without_torch_says_so() -> None:
     a, b = _cls("onnx-int8", SCORES_A), _cls("x-other", SCORES_B)
-    (c,) = score.compare_runtimes([b, a])
-    assert (c["baseline"], c["runtime"]) == ("onnx-int8", "x-other")
+    (c,) = score.compare_runtimes([b, a])  # no fallback baseline
+    assert c["baseline"] is None and c["comparable"] is False
+    assert c["runtime"] == "onnx-int8, x-other"
+    assert c["note"] == "no torch-fp32 run: nothing is compared against the published model"
+    table = score.render_compare([c])
+    assert "### org/m@main:X: onnx-int8, x-other\n" in table and " vs " not in table
+    # With onnx-fp32 present, the quantisation pairs still render.
+    fp32 = _cls("onnx-fp32", SCORES_A, onnx=ONNX_FP32_META)
+    note, pair = score.compare_runtimes([a, fp32])
+    assert note["baseline"] is None and "no torch-fp32 run" in note["note"]
+    assert (pair["baseline"], pair["runtime"]) == ("onnx-fp32", "onnx-int8")
 
 
 def test_compare_needs_two_runtimes_of_one_spec() -> None:
@@ -1166,6 +1345,59 @@ def test_compare_command_reads_schema_2_and_3(
     files = [str(res / "summary-a-torch-fp32.json"), str(res / "summary-a-onnx-int8.json")]
     assert score.main(["compare", *files]) == 0
     assert "rate deltas only" in capsys.readouterr().out
+
+
+def test_schema_3_onnx_block_is_read_as_int8(tmp_path: Path) -> None:
+    assert score.SCHEMA == 4 and score.READABLE_SCHEMAS == (2, 3, 4)
+    old_q = {k: v for k, v in ONNX_META["quantization"].items() if k != "applied"}
+    v3 = _cls("onnx-int8", SCORES_B, onnx={**ONNX_META, "quantization": old_q})
+    _summary_file(tmp_path / "v3.json", 3, [v3])
+    v4 = _cls("onnx-fp32", SCORES_A, onnx=ONNX_FP32_META)
+    _summary_file(tmp_path / "v4.json", 4, [v4, _cls("torch-fp32", SCORES_A)])
+    classifiers, _, notes = score.collect_results([tmp_path])
+    assert notes == []
+    by_rt = {c["runtime"]: c for c in classifiers}
+    assert by_rt["onnx-int8"]["onnx"]["quantization"]["applied"] is True  # schema 3: int8
+    assert by_rt["onnx-fp32"]["onnx"]["quantization"]["applied"] is False  # schema 4 as is
+    assert "applied" not in v3["onnx"]["quantization"]  # the input isn't mutated
+    table = score.render_markdown(
+        {"sets": {"words": {"match": True}}, "heuristics": None, "classifiers": classifiers}
+    )
+    assert "ONNX int8: `dddddddddddd`" in table and "ONNX fp32: `eeeeeeeeeeee`" in table
+    # schema 4 and other schemas pass through untouched; a malformed block is left alone
+    assert score.read_classifier(v3, 4) == v3
+    odd = score.read_classifier({"onnx": {"quantization": "x"}}, 3)
+    assert odd["onnx"]["quantization"] == {"applied": True}
+
+
+def test_int8_pairs_warn_when_the_exports_differ() -> None:
+    fp32 = _cls("onnx-fp32", SCORES_A, onnx=ONNX_FP32_META)
+    same = _cls("onnx-int8", SCORES_B, onnx=ONNX_META)
+    other_export = {**ONNX_META, "fp32_sha256": "f" * 64}
+    rr = _cls("onnx-int8-rr", SCORES_B, onnx=other_export)
+    torch = _cls("torch-fp32", SCORES_A)
+    for c in (fp32, same, rr, torch):
+        c["cpu_vnni"] = False
+    out = score.compare_runtimes([torch, fp32, same, rr])
+    pairs = {(c["baseline"], c["runtime"]): c for c in out}
+    assert set(pairs) == {
+        ("torch-fp32", "onnx-fp32"),
+        ("torch-fp32", "onnx-int8"),
+        ("torch-fp32", "onnx-int8-rr"),
+        ("onnx-fp32", "onnx-int8"),
+        ("onnx-fp32", "onnx-int8-rr"),
+    }
+    assert pairs[("onnx-fp32", "onnx-int8")]["warnings"] == []
+    (w,) = pairs[("onnx-fp32", "onnx-int8-rr")]["warnings"]
+    assert w.startswith(score.EXPORTS_DIFFER) and "`ffffffffffff`" in w
+    assert pairs[("torch-fp32", "onnx-int8-rr")]["warnings"] == []  # torch has no export
+    table = score.render_compare(out)
+    assert "**Warning: exports differ; quantisation effect mixed with export variance" in table
+    assert "CPU VNNI: onnx-fp32: False; onnx-int8-rr: False" in table
+    # A missing fp32_sha256 on one side counts as different, not as equal.
+    no_sha = _cls("onnx-int8", SCORES_B)
+    (x,) = [c for c in score.compare_runtimes([fp32, no_sha]) if c["baseline"] == "onnx-fp32"]
+    assert x["warnings"] and "`None`" in x["warnings"][0]
 
 
 def test_compare_skips_unreadable_files_with_a_note(
@@ -1227,18 +1459,23 @@ def test_one_bad_pair_does_not_stop_the_report() -> None:
     assert z["comparable"] is False and z["note"] == "summary not usable (KeyError)"
 
 
-def test_duplicate_runs_are_not_compared() -> None:
+def test_duplicate_runs_exclude_only_that_runtime() -> None:
     a, b = _cls("torch-fp32", SCORES_A), _cls("onnx-int8", SCORES_B)
+    fp32 = _cls("onnx-fp32", SCORES_A)
     y_a, y_b = {**a, "label": "Y"}, {**b, "label": "Y"}
-    (dup, ok) = score.compare_runtimes([a, b, _cls("onnx-int8", SCORES_A), y_a, y_b])
+    out = score.compare_runtimes([a, b, _cls("onnx-int8", SCORES_A), fp32, y_a, y_b])
+    dup, fp32_pair, ok = out
     assert dup["spec"] == "org/m@main:X" and dup["comparable"] is False
-    assert (
-        dup["note"] == "not comparable: duplicate runs"
-        and dup["runtime"] == "onnx-int8, torch-fp32"
-    )
-    assert ok["spec"] == "org/m@main:Y" and ok["comparable"] is True  # the others still render
-    table = score.render_compare([dup, ok])
-    assert "**not comparable: duplicate runs**" in table and "### org/m@main:Y" in table
+    assert dup["note"] == "not comparable: duplicate runs of onnx-int8"
+    assert dup["runtime"] == "onnx-int8" and dup["baseline"] is None
+    # the spec's other pair still renders; nothing is paired with the duplicated runtime
+    assert (fp32_pair["baseline"], fp32_pair["runtime"]) == ("torch-fp32", "onnx-fp32")
+    assert fp32_pair["comparable"] is True and fp32_pair["rows"]
+    assert ok["spec"] == "org/m@main:Y" and ok["comparable"] is True
+    table = score.render_compare(out)
+    assert "**not comparable: duplicate runs of onnx-int8**" in table
+    assert "### org/m@main:X: onnx-fp32 vs torch-fp32" in table and "### org/m@main:Y" in table
+    assert "onnx-int8 vs" not in table.split("### org/m@main:Y")[0]
 
 
 def test_duplicate_score_records_are_not_compared(
@@ -1252,7 +1489,7 @@ def test_duplicate_score_records_are_not_compared(
     _, scores, _ = score.collect_results([tmp_path])
     assert scores[("org/m@main:X", "onnx-int8")] == {"kind": score.DUPLICATE_RECORD}
     assert score.main(["compare", str(tmp_path)]) == 0
-    assert "**not comparable: duplicate runs**" in capsys.readouterr().out
+    assert "**not comparable: duplicate runs of onnx-int8**" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("weights", [[None], "not-a-list", [{"file": "m", "sha256": None}, 3]])
@@ -1299,9 +1536,9 @@ def test_onnx_model_job_end_to_end_writes_scores_without_text(
     sets_dir, _, marker = built
     work: list[Path] = []
 
-    def fake_onnx(meta: dict[str, Any], label: str, work_dir: Path) -> LatentFake:
+    def fake_onnx(meta: dict[str, Any], label: str, work_dir: Path, runtime: str) -> LatentFake:
         work.append(work_dir)
-        meta["onnx"] = ONNX_META
+        meta["onnx"] = ONNX_FP32_META if runtime == "onnx-fp32" else ONNX_META
         return LatentFake("x")
 
     monkeypatch.setattr(score, "load_onnx_detector", fake_onnx)
@@ -1317,9 +1554,13 @@ def test_onnx_model_job_end_to_end_writes_scores_without_text(
         assert score.main([*argv, *_model_dirs(dirs, [OK_META])]) == 0
         paths[runtime] = (out, sc)
     printed = capsys.readouterr()
-    assert work == [tmp_path / "onnx" / score.model_work_name(OK_META)]
+    name = score.model_work_name(OK_META)
+    assert work == [tmp_path / "onnx" / f"{name}-{rt}" for rt in score.ONNX_RUNTIMES]
+    fp32_summary = json.loads(paths["onnx-fp32"][0].read_text())
+    assert fp32_summary["classifiers"][0]["onnx"]["quantization"]["applied"] is False
+    assert "[onnx-fp32]" in printed.out and "ONNX fp32: `eeeeeeeeeeee`" in printed.out
     summary = json.loads(paths["onnx-int8"][0].read_text())
-    assert summary["schema"] == 3
+    assert summary["schema"] == 4
     assert summary["environment"]["cpu_model"] == score.cpu_model()
     (cls,) = summary["classifiers"]
     assert cls["runtime"] == "onnx-int8" and cls["onnx"]["sha256"] == "d" * 64
@@ -1336,14 +1577,23 @@ def test_onnx_model_job_end_to_end_writes_scores_without_text(
     table = capsys.readouterr().out
     assert "decisions differ" in table and "| 0.00% (0/" in table  # identical fakes
     assert "Latency caveat" not in table  # same machine
+    for rt in score.ONNX_RUNTIMES:  # every ONNX runtime against torch
+        assert f"### org/m@main:INJECTION: {rt} vs torch-fp32" in table
+    for rt in score.INT8_RUNTIMES:  # and the quantisation effect: each int8 vs onnx-fp32
+        assert f"### org/m@main:INJECTION: {rt} vs onnx-fp32" in table
+    assert "vs onnx-int8" not in table  # int8 variants aren't paired with each other
+    assert "exports differ" not in table  # both fakes record the same fp32 export
+    assert table.count("### ") == 5
 
 
+@pytest.mark.parametrize("runtime", ["onnx-fp32", "onnx-int8", "onnx-int8-rr"])
 @pytest.mark.parametrize("fail", [False, True])
 def test_onnx_temp_dir_lives_as_long_as_the_detector(
     built: tuple[Path, dict[str, Any], str],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fail: bool,
+    runtime: str,
 ) -> None:
     sets_dir, _, _ = built
     seen: list[Path] = []
@@ -1355,7 +1605,7 @@ def test_onnx_temp_dir_lives_as_long_as_the_detector(
                 raise RuntimeError("scoring failed")
             return super().evaluate(text)
 
-    def fake_onnx(meta: dict[str, Any], label: str, work_dir: Path) -> Checking:
+    def fake_onnx(meta: dict[str, Any], label: str, work_dir: Path, runtime: str) -> Checking:
         assert work_dir.parent.is_dir()  # the temporary directory; the model's own subdir
         work_dir.mkdir()  # is created by the real loader
         seen.append(work_dir.parent)
@@ -1363,7 +1613,7 @@ def test_onnx_temp_dir_lives_as_long_as_the_detector(
 
     monkeypatch.setattr(score, "load_onnx_detector", fake_onnx)
     monkeypatch.setattr(score, "check_onnx_size", lambda m: 1)
-    argv = ["run", "--sets", str(sets_dir), "--out", str(tmp_path / "o"), "--runtime", "onnx-int8"]
+    argv = ["run", "--sets", str(sets_dir), "--out", str(tmp_path / "o"), "--runtime", runtime]
     assert score.main([*argv, *_model_dirs(tmp_path, [OK_META])]) == (2 if fail else 0)
     assert len(seen) == 1 and not seen[0].exists()  # removed, even on error
 
