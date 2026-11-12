@@ -80,5 +80,51 @@ Latency is reported two ways:
 Model results are report-only, and a word list that isn't pinned marks their false-positive rows
 "unpinned corpus". Empty `models` runs the heuristics alone.
 
+**Runtimes** (#211), input `runtimes` (default `torch-fp32,onnx-int8`; an unknown value fails
+the plan job). Each model × runtime is its own job, with up to 350 minutes:
+
+- `torch-fp32`: the published weights in torch, as before.
+- `onnx-int8`: the runtime the classifier sidecar will use (#198). It takes a Hugging Face
+  sequence classifier whose weights fit a single-file ONNX export. Protobuf limits that file to
+  2 GB, so the job fails with an error, before exporting, when the weights would take more than
+  1.8 GB in fp32 (counted from the safetensors headers). The job exports the downloaded weights
+  offline to ONNX with torch's default exporter at opset 20, with dynamic batch and sequence
+  axes and inputs `input_ids` and `attention_mask`. Before quantising, it checks the fp32
+  export against torch on four fixed windows and fails if any probability differs by more than
+  0.001 or isn't finite. The check windows are no longer than the model's own maximum
+  length. It then quantises with onnxruntime's `quantize_dynamic` (QInt8 weights, per-tensor) and
+  scores with an onnxruntime CPU session. Chunking, batching, thresholds and latency are the
+  same code as torch's. The summary records:
+  - the int8 and fp32 files' sha256 and sizes;
+  - the opset and the onnx, onnxscript and onnxruntime versions;
+  - the quantisation settings;
+  - the check's result and tolerance;
+  - the source weights' sha256.
+
+  The pinned versions are in the workflow's `env`. Without `--work-dir`, the ONNX files sit in a
+  temporary directory that is removed when scoring ends. Each model gets its own subdirectory
+  (its spec's slug and resolved revision).
+
+Each model job also uploads its per-prompt scores, keyed by set, family and index, with no text.
+A final report-only job (`score.py compare`) shows each model's runtimes side by side, with
+torch-fp32 as the baseline:
+
+- for each threshold and set: both block rates, the delta in percentage points, and the share
+  of prompts whose block decision differs;
+- the largest and mean score difference;
+- the one-prompt-at-a-time latency.
+
+Runs pair only when they scored the same source weights (resolved revision and every weights
+sha256); otherwise the model shows "not comparable: weights differ". Several runs of one model
+and runtime are ambiguous, so that model shows "not comparable: duplicate runs". A file or score record
+that can't be used is skipped with a note naming the error type, and the rest of the report
+still renders. Each summary records the runner's CPU model (`environment.cpu_model`), and the
+latency rows carry a caveat when the two runs used different CPUs.
+
+Summaries are schema 3: each classifier carries `runtime`, and a schema 2 summary is read as
+torch-fp32. Schema 3 computes the softmax in float64 from torch's fp32 logits, where schema 2
+used a float32 softmax. Scores can differ by about 1e-7, so a comparison against a schema 2
+baseline can flip a prompt that sits exactly on a threshold.
+
 Locally (no models): `python -m redteam.eval.build_sets --out /tmp/sets` needs garak 0.17.1 in
 the interpreter; then `python -m redteam.eval.score run --sets /tmp/sets --heuristics --gate --out summary.json`.
