@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- The staging red-team's false-positive check now sends a UUID whose first group is hex for letters. v0.6.0's encoded-payload guard blocked that prompt, so the gate shows the #210 fix live and catches a regression (refs #230).
+
 ### Changed
 - Staging runs v0.6.1 (digest `sha256:5ec72097…`, the signed index the 0.6.1 tag points at): the encoded-guard UUID fix (#210), LiteLLM 1.109.1 (#218), node 26 (#222) and OpenTelemetry 1.45.2 (#220).
 
