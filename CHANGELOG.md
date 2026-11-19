@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Staging runs v0.6.1 (digest `sha256:5ec72097…`, the signed index the 0.6.1 tag points at): the encoded-guard UUID fix (#210), LiteLLM 1.109.1 (#218), node 26 (#222) and OpenTelemetry 1.45.2 (#220).
+
 ## [0.6.1] - 2026-11-19
 
 ### Added

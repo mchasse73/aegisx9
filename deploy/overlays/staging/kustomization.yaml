@@ -16,7 +16,7 @@ helmCharts:
     valuesFile: values.yaml
 images:
   - name: ghcr.io/mchasse73/aegisx9
-    # v0.6.0: the signed digest from the release workflow for main a8bffc2 (2026-11-04), the
-    # same index the 0.6.0 tag points at (tag run verified main's signatures, then re-tagged).
-    # Adds the embedded-instruction and instruction-echo guards (#179, #195, ADR 0024).
-    digest: sha256:12de72258227af5e85f97d2b68b6e0b1279a452b9e037608779de2c640b6141e
+    # v0.6.1: the signed digest from the release workflow for main 2e562ea (2026-11-19), the
+    # same index the 0.6.1 tag points at (tag run verified main's signatures, then re-tagged).
+    # UUID fix in the encoded guard (#210), LiteLLM 1.109.1, node 26 (#222), CVE fixes (#220).
+    digest: sha256:5ec7209789734d870dd19fbd45ef9529ea1970689f740aea2e387583dea9a754
