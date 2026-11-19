@@ -1,7 +1,7 @@
 # 25. A model-based injection classifier in a loopback sidecar
 
-- Status: Proposed
-- Date: 2026-11-19
+- Status: Accepted
+- Date: 2026-11-19 (owner decision)
 - Issues: #198; evaluation harness #209, runtimes #211 and #213; heuristics ADR 0024
 
 ## Context
@@ -35,7 +35,8 @@ Owner decisions already taken, recorded here as decided:
 2. The classifier runs as a **sidecar on loopback** in the gateway pod.
 3. The model is **baked into the signed image, sha256-pinned, with no runtime download**.
 4. **Fail closed**: if the classifier is down, slower than its timeout or errors, the request is
-   refused, not passed.
+   refused, not passed. This applies in `enforce` mode. In `report` mode, which never blocks, an
+   outage is logged and the request proceeds (owner decision, 2026-11-19).
 5. **Runtime** (2026-11-19): ONNX fp32 by default. int8 only where that model's own guard-eval run
    is lossless against onnx-fp32: within 0.5 points on target and hold-out, and at most 1% of
    decisions flipped.
