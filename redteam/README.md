@@ -77,6 +77,12 @@ Latency is reported two ways:
 - one prompt at a time: a fixed sample of 200 prompts, which is what a gateway sidecar would
   see.
 
+Resources are reported per phase (load and export, batched scoring, one prompt at a time): peak
+RSS, RSS at the end and CPU time (#226). The peak is reset between phases on Linux
+(`/proc/self/clear_refs`), so the export's peak doesn't hide the serving peak. Where the reset
+isn't possible, the peak is marked "since process start". The one-prompt-at-a-time peak sizes
+the sidecar's memory request.
+
 Model results are report-only, and a word list that isn't pinned marks their false-positive rows
 "unpinned corpus". Empty `models` runs the heuristics alone.
 

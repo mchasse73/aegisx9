@@ -1565,6 +1565,9 @@ def test_onnx_model_job_end_to_end_writes_scores_without_text(
     (cls,) = summary["classifiers"]
     assert cls["runtime"] == "onnx-int8" and cls["onnx"]["sha256"] == "d" * 64
     assert cls["weights"] == OK_META["weights"]  # the source weights' sha256 stays
+    assert set(cls["resources"]) == {"load", "batched", "single_prompt"}  # #226
+    assert all(r["cpu_seconds"] >= 0 for r in cls["resources"].values())
+    assert "resources, batched scoring: peak RSS" in printed.out
     rec = json.loads(paths["onnx-int8"][1].read_text())
     assert rec["runtime"] == "onnx-int8" and rec["spec"] == "org/m@main:INJECTION"
     assert sum(len(f["scores"]) for f in rec["families"].values()) > 0
@@ -1637,3 +1640,50 @@ def test_run_rejects_unknown_runtime(tmp_path: Path) -> None:
     argv = ["run", "--sets", str(tmp_path), "--out", str(tmp_path / "o")]
     with pytest.raises(SystemExit):
         score.main([*argv, "--runtime", "tensorrt"])
+
+
+def test_memory_kib_reads_rss_and_high_water_mark(tmp_path: Path) -> None:
+    status = tmp_path / "status"
+    status.write_text("Name:\tpython\nVmHWM:\t  204800 kB\nVmRSS:\t  102400 kB\n")
+    assert score.memory_kib(status) == {"rss": 102400, "hwm": 204800}
+    assert score.memory_kib(tmp_path / "missing") == {"rss": None, "hwm": None}
+    status.write_text("VmRSS:\tgarbage\n")
+    assert score.memory_kib(status) == {"rss": None, "hwm": None}
+
+
+def test_reset_peak_reports_whether_it_could(tmp_path: Path) -> None:
+    target = tmp_path / "clear_refs"
+    assert score.reset_peak(target) is True and target.read_text() == "5"
+    assert score.reset_peak(tmp_path / "no" / "such" / "file") is False
+
+
+def test_resource_meter_records_each_phase(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(score, "reset_peak", lambda: False)
+    monkeypatch.setattr(score, "memory_kib", lambda: {"rss": 1024 * 300, "hwm": 1024 * 512})
+    meter = score.ResourceMeter()
+    meter.start()
+    meter.stop("load")
+    (phase,) = meter.phases.values()
+    assert phase["rss_mib"] == 300.0 and phase["peak_rss_mib"] == 512.0
+    assert phase["peak_is_phase_only"] is False and phase["cpu_seconds"] >= 0
+
+
+def test_resource_lines_say_when_the_peak_spans_the_process() -> None:
+    res = {
+        "load": {
+            "peak_rss_mib": 900.0,
+            "rss_mib": 700.0,
+            "cpu_seconds": 3.0,
+            "peak_is_phase_only": False,
+        },
+        "single_prompt": {
+            "peak_rss_mib": 710.0,
+            "rss_mib": 705.0,
+            "cpu_seconds": 1.0,
+            "peak_is_phase_only": True,
+        },
+    }
+    load, single = score.resource_lines(res)
+    assert "load and export: peak RSS 900.0 MiB (since process start)" in load
+    assert "one prompt at a time: peak RSS 710.0 MiB, RSS after 705.0 MiB, CPU 1.0 s" in single
+    assert score.resource_lines({}) == []

@@ -154,6 +154,67 @@ class Outcome:
     chunk_seconds: float | None = None
 
 
+_MIB = 1024 * 1024
+
+
+def memory_kib(status: Path = Path("/proc/self/status")) -> dict[str, int | None]:
+    """This process's resident set (``VmRSS``) and its high-water mark (``VmHWM``), in KiB.
+
+    Both are None where /proc isn't available.
+    """
+    out: dict[str, int | None] = {"rss": None, "hwm": None}
+    try:
+        for line in status.read_text(encoding="utf-8", errors="replace").splitlines():
+            key, _, value = line.partition(":")
+            field_ = {"VmRSS": "rss", "VmHWM": "hwm"}.get(key)
+            if field_ and value.split() and value.split()[0].isdigit():
+                out[field_] = int(value.split()[0])
+    except OSError:
+        pass
+    return out
+
+
+def reset_peak(clear_refs: Path = Path("/proc/self/clear_refs")) -> bool:
+    """Reset ``VmHWM`` to the current RSS (Linux: write "5" to clear_refs); False if not possible.
+
+    Called between phases so the export's peak doesn't hide the serving peak (#226).
+    """
+    try:
+        clear_refs.write_text("5", encoding="ascii")
+    except OSError:
+        return False
+    return True
+
+
+def _mib(kib: int | None) -> float | None:
+    return None if kib is None else round(kib * 1024 / _MIB, 1)
+
+
+@dataclass
+class ResourceMeter:
+    """Peak RSS and CPU time per phase of one classifier run (sizing the sidecar, #226)."""
+
+    phases: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _cpu: float = 0.0
+    _reset: bool = False
+
+    def start(self) -> None:
+        self._reset = reset_peak()
+        t = os.times()
+        self._cpu = t.user + t.system
+
+    def stop(self, phase: str) -> None:
+        t = os.times()
+        mem = memory_kib()
+        self.phases[phase] = {
+            "cpu_seconds": round(t.user + t.system - self._cpu, 2),
+            "rss_mib": _mib(mem["rss"]),
+            # Without a reset the high-water mark covers everything before this phase too.
+            "peak_rss_mib": _mib(mem["hwm"]),
+            "peak_is_phase_only": self._reset,
+        }
+
+
 def cpu_model(cpuinfo: Path = Path("/proc/cpuinfo")) -> str:
     """The first "model name" in /proc/cpuinfo, or "unknown" (latency depends on it)."""
     try:
@@ -1461,6 +1522,25 @@ def _classifier_lines(
             f"p50 {lat['per_chunk_ms']['p50']} ms, p95 {lat['per_chunk_ms']['p95']} ms; "
             f"at most {lat['max_chunks']} chunks per prompt"
         )
+    lines.extend(resource_lines(c.get("resources") or {}))
+    return lines
+
+
+def resource_lines(res: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    """Markdown lines for a classifier's per-phase peak RSS and CPU time (#226)."""
+    lines = []
+    for phase, title in (
+        ("load", "load and export"),
+        ("batched", "batched scoring"),
+        ("single_prompt", "one prompt at a time"),
+    ):
+        r = res.get(phase)
+        if r:
+            scope = "" if r.get("peak_is_phase_only") else " (since process start)"
+            lines.append(
+                f"\nresources, {title}: peak RSS {r.get('peak_rss_mib')} MiB{scope}, "
+                f"RSS after {r.get('rss_mib')} MiB, CPU {r.get('cpu_seconds')} s"
+            )
     return lines
 
 
@@ -1649,15 +1729,22 @@ def score(
                 continue
             meta["runtime"] = runtime
             factory = detector_factory or (lambda m: load_detector(m, runtime, files_dir))
+            meter = ResourceMeter()
+            meter.start()
             detector = factory(meta)
+            meter.stop("load")
             log(f"{meta['model_id']} [{runtime}]: {len(prompts)} prompts")
+            meter.start()
             outcomes = run_detector(detector, prompts)
+            meter.stop("batched")
             sample = single_prompt_sample(len(prompts))
             log(f"{meta['model_id']}: {len(sample)} prompts one at a time")
+            meter.start()
             single = [detector.evaluate(prompts[i].text) for i in sample]
-            summary["classifiers"].append(
-                classifier_summary(prompts, outcomes, meta, heuristic_blocked, single)
-            )
+            meter.stop("single_prompt")
+            entry = classifier_summary(prompts, outcomes, meta, heuristic_blocked, single)
+            entry["resources"] = meter.phases
+            summary["classifiers"].append(entry)
             if classifier_outcomes is not None:
                 classifier_outcomes.append((meta, outcomes))
     return summary, prompts, heuristic_outcomes
