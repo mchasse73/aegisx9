@@ -4,11 +4,18 @@
 # Node.js runs the Prisma CLI that LiteLLM uses to migrate its database. Taken from the
 # official image pinned by digest (no unverified download); only the node binary reaches
 # the runtime image, npm stays in the build stage.
-FROM node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS node
+# Since Node.js 26 the official linux binaries link libatomic.so.1 (amd64 and arm64; Node 24
+# did not). The node image ships it, python:3.12-slim does not, so both stages below install
+# Debian's libatomic1 (#222).
+FROM node:26.13.1-trixie-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc AS node
 
 FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS build
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /src
+# libatomic1: needed by the node binary (see the node stage).
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libatomic1 \
+ && rm -rf /var/lib/apt/lists/*
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 COPY requirements/runtime.txt requirements/runtime.txt
@@ -28,9 +35,15 @@ RUN pip install --no-deps .
 # set in the runtime stage, so the generated client points at these exact paths.
 #   PRISMA_BINARY_CACHE_DIR  Prisma CLI (npm package) and its engines
 #   PRISMA_NODEENV_CACHE_DIR never created: node is on PATH, and if prisma-client-py ever
-#                            fell back to installing a private Node it would fail on the
-#                            read-only /opt instead of downloading one
+#                            fell back to installing a private Node at runtime it would
+#                            fail on the read-only /opt instead of downloading one
 #   PRISMA_QUERY_ENGINE_BINARY the query engine for this platform, chosen once here
+# prisma-client-py accepts node and npm from PATH only if `<bin> --version` prints a
+# version; otherwise it silently installs a private Node with nodeenv, and in this
+# (writable) build stage that download succeeds. That is how the node 26 upgrade first
+# failed: the copied node could not load libatomic.so.1, so prisma-client-py downloaded a
+# nodeenv whose node failed the same way (npm exit 127, #222). So node and npm are checked
+# here first, and the bake step fails if a nodeenv exists.
 ENV PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     PRISMA_NODEENV_CACHE_DIR=/opt/prisma/nodeenv \
     PRISMA_CLI_QUERY_ENGINE_TYPE=binary \
@@ -42,6 +55,7 @@ COPY scripts/image/bake_prisma.py /src/scripts/image/bake_prisma.py
 COPY --from=node /usr/local/bin/node /opt/prisma/node/bin/node
 COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && node --version && npm --version \
  && SCHEMA="$(python -c 'import litellm.proxy, pathlib; print(pathlib.Path(litellm.proxy.__file__).parent / "schema.prisma")')" \
  && prisma generate --schema "${SCHEMA}" \
  && python scripts/image/bake_prisma.py
@@ -55,8 +69,10 @@ LABEL org.opencontainers.image.title="aegisx9" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${VERSION}"
 # Debian security fixes land here without waiting for a new base digest (#205).
+# libatomic1: needed by the node binary (see the node stage).
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libatomic1 \
  && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system --gid 10001 aegisx9 \
  && useradd --system --uid 10001 --gid aegisx9 --no-create-home --shell /usr/sbin/nologin aegisx9

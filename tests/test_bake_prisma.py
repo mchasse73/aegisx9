@@ -22,6 +22,7 @@ PATHS = {
     "debian-openssl-1.1.x": "/opt/prisma/binaries/query-engine-debian-openssl-1.1.x",
     "debian-openssl-3.0.x": "/opt/prisma/binaries/query-engine-debian-openssl-3.0.x",
     "linux-musl": "/opt/prisma/binaries/query-engine-linux-musl",
+    "linux-arm64-openssl-3.0.x": "/opt/prisma/binaries/query-engine-linux-arm64-openssl-3.0.x",
 }
 
 
@@ -38,3 +39,21 @@ def test_select_engine_never_crosses_distro_or_major() -> None:
     assert bake.select_engine("rhel-openssl-3.0.x", PATHS) is None
     assert bake.select_engine("debian-openssl-4.0.x", PATHS) is None
     assert bake.select_engine("darwin-arm64", PATHS) is None
+
+
+def test_select_engine_arm64_uses_the_arm64_engine() -> None:
+    bake = _load()
+    # prisma-client-py reports the x86-64 name on arm64 too; the arm64 engine must be chosen.
+    arm64 = PATHS["linux-arm64-openssl-3.0.x"]
+    for machine in ("aarch64", "arm64"):
+        assert bake.select_engine("debian-openssl-3.5.x", PATHS, machine) == arm64
+    assert (
+        bake.select_engine("debian-openssl-3.5.x", PATHS, "x86_64") == PATHS["debian-openssl-3.0.x"]
+    )
+
+
+def test_select_engine_arm64_never_falls_back_to_x86_64() -> None:
+    bake = _load()
+    assert bake.select_engine("linux-musl-openssl-3.0.x", PATHS, "aarch64") is None
+    assert bake.select_engine("linux-musl", PATHS, "aarch64") is None
+    assert bake.select_engine("debian-openssl-1.1.x", PATHS, "aarch64") is None
