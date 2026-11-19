@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-19 (owner decision)
-- Revised 2026-11-19 after review (PR #223: 13 findings)
+- Revised 2026-11-19 after review (PR #223: 13 findings); the four resulting changes accepted by the owner the same day
 - Issues: #198; evaluation harness #209, runtimes #211 and #213; heuristics ADR 0024
 
 ## Context
@@ -503,13 +503,12 @@ network.
   workflow and published as a signed OCI artifact that the image build pulls by digest.
 - **CPU calibration**: per-window latency on the cluster's nodes, which sets the window cap and the
   CPU limit.
-- **Needs the owner (changes from the review):**
-  - The staging quota increase (section 5) is a capacity and cost change on shared infrastructure:
-    the owner's yes, through ops-central's build job.
-  - Broker caller authentication amends ADR 0009, an accepted decision.
-  - Scoring every turn, with a per-pod cache, replaces the current-turn scope this ADR was
-    accepted with. The cache is per-pod in-process state; it is argued above to be an
-    optimisation only, not shared state, under the HA design rule.
-  - Report mode's probes (section 5) mean a classifier that fails its startup checks keeps
-    running and answering `not_ready`. That follows the owner's report-mode decision, but it is a
-    second place where report mode doesn't fail closed.
+- **Owner decisions on the review changes (2026-11-19):**
+  - Scoring every untrusted message in every turn, with the per-pod verdict cache: accepted.
+  - Broker caller authentication with a per-pod token only the gateway holds, before the
+    classifier ships: accepted. It amends ADR 0009.
+  - The staging quota increase: approved, filed as an ops-central `k3s-change` build job once the
+    model is chosen. Both sizes (22M and 86M) are given to ops-central in advance, because the
+    cluster is tight on memory.
+  - In report mode, a classifier that fails its startup checks keeps running and answers
+    `not_ready`: accepted.
