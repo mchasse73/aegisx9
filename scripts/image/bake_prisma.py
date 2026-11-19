@@ -13,8 +13,9 @@ exact match falls back to the same distro and OpenSSL major.
 
 prisma-client-py's platform name also ignores the CPU: on arm64 it still reports
 ``debian-openssl-3.5.x``, which names the x86-64 engine. The Prisma CLI publishes the arm64
-glibc engine as ``linux-arm64-openssl-*`` (musl: ``linux-musl-arm64-openssl-*``), so on arm64
-the target is renamed to those before the lookup.
+glibc engine as ``linux-arm64-openssl-*``, so on arm64 a glibc target is renamed to that before
+the lookup. That engine is generic glibc, so every glibc distro maps to it. musl on arm64 isn't
+supported (the image is Debian): it selects nothing and the build fails loudly.
 """
 
 from __future__ import annotations
@@ -37,10 +38,9 @@ def engine_target(target: str, machine: str) -> str | None:
     if machine not in _ARM64:
         return target
     match = _PLATFORM.fullmatch(target)
-    if match is None:
+    if match is None or match["distro"].startswith("linux-musl"):
         return None
-    libc = "linux-musl-arm64" if match["distro"] == "linux-musl" else "linux-arm64"
-    return f"{libc}-openssl-{match['version']}"
+    return f"linux-arm64-openssl-{match['version']}"
 
 
 def select_engine(target: str, paths: Mapping[str, str], machine: str = "x86_64") -> str | None:
@@ -62,9 +62,15 @@ def main() -> int:
     from prisma.client import BINARY_PATHS  # type: ignore[import-not-found]
 
     target = platform.binary_platform()
-    selected = select_engine(target, BINARY_PATHS.query_engine, host_platform.machine())
+    machine = host_platform.machine()
+    selected = select_engine(target, BINARY_PATHS.query_engine, machine)
     if selected is None:
-        print(f"no query engine for {target}: {sorted(BINARY_PATHS.query_engine)}", file=sys.stderr)
+        looked_up = engine_target(target, machine)
+        print(
+            f"no query engine for {target} on {machine} (looked up {looked_up}): "
+            f"{sorted(BINARY_PATHS.query_engine)}",
+            file=sys.stderr,
+        )
         return 1
     engine = Path(selected)
     if PRISMA_ROOT not in engine.parents:

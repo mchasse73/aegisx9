@@ -57,3 +57,17 @@ def test_select_engine_arm64_never_falls_back_to_x86_64() -> None:
     assert bake.select_engine("linux-musl-openssl-3.0.x", PATHS, "aarch64") is None
     assert bake.select_engine("linux-musl", PATHS, "aarch64") is None
     assert bake.select_engine("debian-openssl-1.1.x", PATHS, "aarch64") is None
+
+
+def test_select_engine_arm64_maps_every_glibc_distro_to_the_generic_engine() -> None:
+    bake = _load()
+    # The linux-arm64 engine is generic glibc: distro doesn't matter on arm64, unlike x86-64.
+    arm64 = PATHS["linux-arm64-openssl-3.0.x"]
+    assert bake.select_engine("rhel-openssl-3.0.x", PATHS, "aarch64") == arm64
+    assert bake.select_engine("rhel-openssl-3.0.x", PATHS, "x86_64") is None
+
+
+def test_select_engine_arm64_musl_is_unsupported() -> None:
+    bake = _load()
+    assert bake.select_engine("linux-musl-arm64-openssl-3.0.x", PATHS, "aarch64") is None
+    assert bake.engine_target("linux-musl-arm64-openssl-3.0.x", "aarch64") is None
