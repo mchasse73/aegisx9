@@ -358,7 +358,11 @@ network.
   made a private package under the same GHCR prefix. That keeps the Kyverno policy unchanged and
   uses the existing pull secret.
 - **Reproducible export**: the build relies on the export reproducing the lock's ONNX sha256 with
-  pinned versions. If it doesn't, the ONNX file is exported once by a dedicated workflow and
-  published as a signed OCI artifact that the image build pulls by digest.
+  pinned versions. Evidence so far: in guard-eval run 43152667170 (#213), the separate
+  onnx-fp32, onnx-int8 and onnx-int8-rr jobs exported deberta-v3-base to byte-identical fp32 files
+  (one sha256), on hosted runners with different CPUs. That covers one architecture family and one
+  set of pins, so the build check stays. If a build ever fails it, the ONNX file is exported once
+  by a dedicated workflow and published as a signed OCI artifact that the image build pulls by
+  digest.
 - **CPU calibration**: per-window latency on the cluster's nodes, which sets the window cap and the
   CPU limit.
