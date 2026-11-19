@@ -1,6 +1,13 @@
 ---
 ancestor: null
 releases:
+  0.6.1:
+    changes:
+      trivial:
+        - >-
+          No changes to the collection's roles; version aligned with the AegisX9 release
+          (dependency and image fixes).
+    release_date: "2026-11-19"
   0.6.0:
     changes:
       trivial:
