@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import gc
 import hashlib
 import json
 import math
@@ -206,13 +207,26 @@ class ResourceMeter:
     def stop(self, phase: str) -> None:
         t = os.times()
         mem = memory_kib()
+        peak, phase_only = mem["hwm"], self._reset
+        if peak is None:  # no /proc (e.g. macOS): the process-wide peak from getrusage
+            peak, phase_only = max_rss_kib(), False
         self.phases[phase] = {
             "cpu_seconds": round(t.user + t.system - self._cpu, 2),
             "rss_mib": _mib(mem["rss"]),
             # Without a reset the high-water mark covers everything before this phase too.
-            "peak_rss_mib": _mib(mem["hwm"]),
-            "peak_is_phase_only": self._reset,
+            "peak_rss_mib": _mib(peak),
+            "peak_is_phase_only": phase_only,
         }
+
+
+def max_rss_kib() -> int | None:
+    """The process's peak RSS from ``getrusage``, in KiB (macOS reports bytes), or None."""
+    try:
+        import resource
+    except ImportError:  # pragma: no cover - not on POSIX
+        return None
+    peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return peak // 1024 if sys.platform == "darwin" else peak
 
 
 def cpu_model(cpuinfo: Path = Path("/proc/cpuinfo")) -> str:
@@ -1747,6 +1761,9 @@ def score(
             summary["classifiers"].append(entry)
             if classifier_outcomes is not None:
                 classifier_outcomes.append((meta, outcomes))
+            # Free this model before the next one loads, so its load peak isn't counted twice.
+            del detector
+            gc.collect()
     return summary, prompts, heuristic_outcomes
 
 

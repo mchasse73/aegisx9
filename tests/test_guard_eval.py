@@ -1687,3 +1687,22 @@ def test_resource_lines_say_when_the_peak_spans_the_process() -> None:
     assert "load and export: peak RSS 900.0 MiB (since process start)" in load
     assert "one prompt at a time: peak RSS 710.0 MiB, RSS after 705.0 MiB, CPU 1.0 s" in single
     assert score.resource_lines({}) == []
+
+
+def test_resource_meter_falls_back_to_getrusage_without_proc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(score, "reset_peak", lambda: True)
+    monkeypatch.setattr(score, "memory_kib", lambda: {"rss": None, "hwm": None})
+    monkeypatch.setattr(score, "max_rss_kib", lambda: 1024 * 640)
+    meter = score.ResourceMeter()
+    meter.start()
+    meter.stop("load")
+    assert meter.phases["load"]["peak_rss_mib"] == 640.0
+    assert meter.phases["load"]["peak_is_phase_only"] is False  # process-wide, whatever reset said
+    assert meter.phases["load"]["rss_mib"] is None
+
+
+def test_max_rss_kib_is_positive_here() -> None:
+    peak = score.max_rss_kib()
+    assert peak is not None and peak > 0
