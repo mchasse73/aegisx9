@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-19
+
 ### Added
 - Guard evaluation records each classifier run's peak RSS, RSS and CPU time per phase (load and export, batched scoring, one prompt at a time). The peak is reset between phases, so the export's peak doesn't hide the serving peak. These numbers size the classifier sidecar's Kubernetes requests and the staging quota (refs #226).
 - ADR 0025 (accepted, owner decision 2026-11-19): a model-based injection classifier in a loopback sidecar of the gateway pod (refs #198). It covers model-selection criteria (threshold fixed on the false-positive corpora, then at least 80% of the hold-out OR'd with the heuristics), a separate signed classifier image with an ONNX fp32 model exported at build time from a hash-locked revision, the `/v1/score` interface with chunking matching the evaluation harness, fail-closed enforcement, a 64-window cap above which requests are refused, logging without prompt text, Scale/HA and assume-breach notes, and a report-only rollout ahead of enforcing. The model and threshold wait for the Llama Prompt Guard 2 run.
