@@ -214,18 +214,18 @@ jobs:
           python3 -m pip install --quiet "pyyaml==6.0.3"
           python3 scripts/ci/check_quota_fit.py rendered/staging.yaml \
             --limits-cpu 3 --limits-memory 3Gi --pods 5
-      - uses: bridgecrewio/checkov-action@3f0caf0c3aa9f56ade6b49f6e60b63aaeafb75a3 # v12.3141.0
+      - uses: bridgecrewio/checkov-action@b17b606d6ec72bb8ba5721ad5b7e340b80a9fc39 # v12.3142.0
         with:
           directory: rendered
           framework: kubernetes
           config_file: .checkov.yaml
       # One step per framework: the action's `framework` input takes a single value.
-      - uses: bridgecrewio/checkov-action@3f0caf0c3aa9f56ade6b49f6e60b63aaeafb75a3 # v12.3141.0
+      - uses: bridgecrewio/checkov-action@b17b606d6ec72bb8ba5721ad5b7e340b80a9fc39 # v12.3142.0
         with:
           directory: .
           framework: dockerfile
           config_file: .checkov.yaml
-      - uses: bridgecrewio/checkov-action@3f0caf0c3aa9f56ade6b49f6e60b63aaeafb75a3 # v12.3141.0
+      - uses: bridgecrewio/checkov-action@b17b606d6ec72bb8ba5721ad5b7e340b80a9fc39 # v12.3142.0
         with:
           directory: .
           framework: github_actions
@@ -535,7 +535,7 @@ jobs:
         run: |
           tflint --init
           tflint --recursive --format compact
-      - uses: bridgecrewio/checkov-action@3f0caf0c3aa9f56ade6b49f6e60b63aaeafb75a3 # v12.3141.0
+      - uses: bridgecrewio/checkov-action@b17b606d6ec72bb8ba5721ad5b7e340b80a9fc39 # v12.3142.0
         with:
           directory: infra
           framework: terraform
