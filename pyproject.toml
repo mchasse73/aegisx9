@@ -22,7 +22,7 @@ dev = [
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
   "ruff==0.17.1",
-  "mypy==2.4.0",
+  "mypy==2.4.1",
   "pyyaml==6.0.3",
   "defusedxml==0.7.1",
   # aegisx9.auth; the gateway image gets the same pins from requirements/runtime.txt.
